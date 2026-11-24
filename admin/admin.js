@@ -3,7 +3,7 @@
   // Production = Firebase Cloud Functions behind this Hosting site; Staging = Vercel.
   const ENVIRONMENTS = {
     production: { label: 'Production', api: '/api' },
-    staging: { label: 'Staging', api: 'https://ankveda-api-staging.vercel.app/api' },
+    staging: { label: 'Staging', api: 'https://ankveda-backend.vercel.app/api' },
   };
   const ENV_KEY = 'ankveda.admin.env';
   const $ = (sel) => document.querySelector(sel);

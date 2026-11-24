@@ -11,8 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test lib/src/**/*.test.js",
     "serve": "npm run build && firebase emulators:start --only functions,firestore,hosting",
-    "deploy:firebase": "firebase deploy --only functions",
-    "deploy:staging": "vercel deploy --prod"
+    "deploy:firebase": "firebase deploy --only functions"
   },
   "dependencies": {
     "@vercel/functions": "^3.11.3",
