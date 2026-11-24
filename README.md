@@ -24,7 +24,7 @@ Both use the Firestore `(default)` database in `ankveda-e6471` (asia-south2).
 
 | Area | Behaviour |
 |---|---|
-| Login | Phone number + 6-digit OTP. **Dummy mode** for now: the code is `DUMMY_OTP` (default `123456`) and the app shows it. Real SMS goes in `deliverCode()` in `backend/src/routes/auth.ts`. |
+| Login | Phone number + 6-digit OTP sent by **VoiceNSMS** (DLT sender `HOTIPL`, template `80388`). Codes are random, hashed, single-use, valid 5 min; 25 s resend wait, 5 wrong attempts, max `OTP_DAILY_LIMIT` (default 8) SMS per number per day. `OTP_TEST_NUMBERS` gives fixed codes without SMS (Play review / QA). Without VoiceNSMS config it falls back to a fixed `DUMMY_OTP` shown in the app. |
 | Free users | Can fill any report form and see the **locked preview**. Home birth number, Daily, Chat and full reports open the paywall. |
 | Premium | Razorpay **auto-renewing subscription**. The paywall shows the **one featured plan** from the backend — price, duration and trial are set in the admin page. |
 | Reports | Name, Phone, Birth date, Compatibility, Career, Future, Car number. Numbers are calculated with Chaldean rules (matches the Figma example: Aarav Sharma → 27 → 9), enriched with **astrologyapi.com** numerology data, and written by **OpenAI**. Generated once and kept. |
@@ -85,7 +85,11 @@ Environment variables (Vercel → Project → Settings → Environment Variables
 | `ASTROLOGY_API_KEY` | astrologyapi.com access token (`ak-…`) |
 | `NODEJS_HELPERS` | `0` (required: keeps the raw body for Razorpay webhook signatures) |
 | `APP_ENV` / `REPORT_RUNNER` | `staging` / `inline` |
-| `OTP_MODE` / `DUMMY_OTP` | `dummy` / `123456` (until real SMS) |
+| `VOICENSMS_API_KEY` | VoiceNSMS API key |
+| `VOICENSMS_SENDER_ID` / `VOICENSMS_TEMPLATE_ID` | `HOTIPL` / `80388` |
+| `VOICENSMS_SEND_URL` | send URL from the VoiceNSMS dashboard with placeholders `{apiKey}` `{senderId}` `{templateId}` `{mobile}`/`{mobile91}` `{message}` |
+| `VOICENSMS_MESSAGE` | exact DLT template text with `{otp}` |
+| `OTP_TEST_NUMBERS` | optional, e.g. `9000000001:482913` |
 | `CORS_ORIGINS` | `https://ankveda-e6471.web.app,https://ankveda-e6471.firebaseapp.com` |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` | Razorpay **test** keys. Webhook URL: `https://ankveda-backend.vercel.app/api/webhooks/razorpay` |
 

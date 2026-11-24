@@ -9,7 +9,9 @@ export const otpRepo = {
   save: (phone: string, challenge: OtpChallengeDoc) => refs.otpChallenges().doc(phone).set(challenge),
   recordFailedAttempt: (phone: string, attempts: number) =>
     refs.otpChallenges().doc(phone).set({ attempts } as Partial<OtpChallengeDoc>, { merge: true }),
-  remove: (phone: string) => refs.otpChallenges().doc(phone).delete(),
+  /** Makes the code single-use while keeping the daily send counter (doc is TTL-deleted later). */
+  consume: (phone: string) =>
+    refs.otpChallenges().doc(phone).set({ codeHash: '', codeExpiresAt: 0, attempts: 0 } as Partial<OtpChallengeDoc>, { merge: true }),
 };
 
 export const webhookEventsRepo = {

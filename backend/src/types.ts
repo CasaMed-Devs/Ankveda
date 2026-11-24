@@ -203,8 +203,15 @@ export type PaymentDoc = Audited & {
 
 export type OtpChallengeDoc = {
   codeHash: string;
+  /** Wrong-code attempts for the current code. */
   attempts: number;
   lastSentAt: number;
+  /** The current code stops working at this time (5 minutes). */
+  codeExpiresAt: number;
+  /** Codes sent on `sendDay` (IST date) — daily SMS cap. */
+  sendCount: number;
+  sendDay: string;
+  /** TTL: the document is deleted a day after the last send. */
   expireAt: number;
 };
 

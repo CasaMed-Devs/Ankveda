@@ -19,6 +19,7 @@ const secrets = {
   adminPassword: defineSecret('ADMIN_PASSWORD'),
   openaiKey: defineSecret('OPENAI_API_KEY'),
   astrologyKey: defineSecret('ASTROLOGY_API_KEY'),
+  voicensmsKey: defineSecret('VOICENSMS_API_KEY'),
   razorpayKeyId: defineSecret('RAZORPAY_KEY_ID'),
   razorpayKeySecret: defineSecret('RAZORPAY_KEY_SECRET'),
   razorpayWebhookSecret: defineSecret('RAZORPAY_WEBHOOK_SECRET'),

@@ -78,11 +78,45 @@ export const config = {
   get razorpayWebhookSecret() {
     return env('RAZORPAY_WEBHOOK_SECRET');
   },
-  /** "dummy" (fixed code, returned to the app) until a real SMS provider is plugged in. */
-  get otpMode() {
-    return env('OTP_MODE') ?? 'dummy';
+  /**
+   * "sms"   = real codes sent through VoiceNSMS (default when VoiceNSMS is configured).
+   * "dummy" = fixed DUMMY_OTP shown in the app — local development / staging only.
+   */
+  get otpMode(): 'sms' | 'dummy' {
+    const value = env('OTP_MODE');
+    if (value === 'sms' || value === 'dummy') return value;
+    return this.voicensms ? 'sms' : 'dummy';
   },
   get dummyOtp() {
     return env('DUMMY_OTP') ?? '123456';
+  },
+  /**
+   * Numbers that always use a fixed code and never receive an SMS (Play Store review, QA),
+   * e.g. "9000000001:482913,9000000002:110022".
+   */
+  get otpTestNumbers(): Map<string, string> {
+    const pairs = (env('OTP_TEST_NUMBERS') ?? '').split(',').map((p) => p.trim().split(':'));
+    return new Map(pairs.filter(([phone, code]) => /^\d{10}$/.test(phone ?? '') && /^\d{6}$/.test(code ?? '')) as [string, string][]);
+  },
+  /** Max login codes sent to one number per day (SMS cost / abuse protection). */
+  get otpDailyLimit() {
+    return Number(env('OTP_DAILY_LIMIT') ?? 8);
+  },
+  /** VoiceNSMS DLT SMS — see src/services/sms.ts for the URL template format. */
+  get voicensms() {
+    const apiKey = env('VOICENSMS_API_KEY');
+    const sendUrl = env('VOICENSMS_SEND_URL');
+    const messageTemplate = env('VOICENSMS_MESSAGE');
+    if (!apiKey || !sendUrl || !messageTemplate) return null;
+    const success = env('VOICENSMS_SUCCESS_PATTERN');
+    return {
+      apiKey,
+      sendUrl,
+      messageTemplate,
+      senderId: env('VOICENSMS_SENDER_ID') ?? '',
+      templateId: env('VOICENSMS_TEMPLATE_ID') ?? '',
+      successPattern: success ? new RegExp(success, 'i') : null,
+      failurePattern: new RegExp(env('VOICENSMS_FAILURE_PATTERN') ?? '"?(status|type)"?\\s*[:=]\\s*"?(error|fail|failed|false)|invalid|insufficient|unauthori', 'i'),
+    };
   },
 };
