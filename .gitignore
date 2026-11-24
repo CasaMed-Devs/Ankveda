@@ -1,0 +1,19 @@
+node_modules/
+*.log
+firestore-debug.log
+ui-debug.log
+.firebase/
+.vercel/
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+.secret.local
+service-account*.json
+*-firebase-adminsdk-*.json
+*.keystore
+*.jks
+*.p8
+*.p12
+*.pem
