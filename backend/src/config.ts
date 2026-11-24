@@ -1,0 +1,88 @@
+/**
+ * Runtime configuration — plain environment variables, so the same code runs on
+ * Vercel (staging) and Firebase Cloud Functions (production; secrets are bound in src/firebase.ts).
+ * Every external integration has a fallback when its key is missing, so the app runs end-to-end locally.
+ */
+
+const env = (name: string) => process.env[name]?.trim() || undefined;
+
+type ServiceAccount = { project_id: string; client_email: string; private_key: string };
+
+const parseServiceAccount = (raw: string | undefined): ServiceAccount | null => {
+  if (!raw) return null;
+  const json = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+  const parsed = JSON.parse(json) as ServiceAccount;
+  if (!parsed.project_id || !parsed.client_email || !parsed.private_key) {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT is missing project_id / client_email / private_key');
+  }
+  return parsed;
+};
+
+export type ReportRunner = 'inline' | 'trigger';
+
+export const config = {
+  /** "staging" on Vercel, "production" on Firebase, "local" in the emulator. */
+  get appEnv() {
+    return env('APP_ENV') ?? (process.env.VERCEL ? 'staging' : 'local');
+  },
+  /** Service-account JSON (raw or base64). Required off Google Cloud (Vercel); Firebase uses default credentials. */
+  get firebaseServiceAccount() {
+    return parseServiceAccount(env('FIREBASE_SERVICE_ACCOUNT'));
+  },
+  get firestoreDatabaseId() {
+    return env('FIRESTORE_DATABASE_ID') ?? '(default)';
+  },
+  /** inline = generate in the request's background (Vercel waitUntil); trigger = Firestore trigger (Firebase). */
+  get reportRunner(): ReportRunner {
+    const value = env('REPORT_RUNNER');
+    if (value === 'inline' || value === 'trigger') return value;
+    return process.env.VERCEL ? 'inline' : 'trigger';
+  },
+  /** Browser origins allowed to call the API (the admin page on Firebase Hosting). */
+  get corsOrigins() {
+    return (env('CORS_ORIGINS') ?? '').split(',').map((o) => o.trim()).filter(Boolean);
+  },
+  get jwtSecret() {
+    const value = env('JWT_SECRET');
+    if (!value) throw new Error('JWT_SECRET is not configured');
+    return value;
+  },
+  get adminPassword() {
+    return env('ADMIN_PASSWORD');
+  },
+  get openaiKey() {
+    return env('OPENAI_API_KEY');
+  },
+  get openaiModel() {
+    return env('OPENAI_MODEL') ?? 'gpt-4o-mini';
+  },
+  /**
+   * astrologyapi.com. An access token ("ak-…") is sent as the `x-astrologyapi-key` header.
+   * Legacy plan keys also need ASTROLOGY_API_USER_ID (non-secret) and use HTTP Basic auth.
+   */
+  get astrology() {
+    const apiKey = env('ASTROLOGY_API_KEY');
+    if (!apiKey) return null;
+    return {
+      apiKey,
+      userId: env('ASTROLOGY_API_USER_ID'),
+      baseUrl: env('ASTROLOGY_API_BASE_URL') ?? 'https://json.astrologyapi.com/v1',
+      chatUrl: env('ASTROLOGY_CHAT_URL') ?? 'https://json-chat.astrologyapi.com/api/chat',
+    };
+  },
+  get razorpay() {
+    const keyId = env('RAZORPAY_KEY_ID');
+    const keySecret = env('RAZORPAY_KEY_SECRET');
+    return keyId && keySecret ? { keyId, keySecret } : null;
+  },
+  get razorpayWebhookSecret() {
+    return env('RAZORPAY_WEBHOOK_SECRET');
+  },
+  /** "dummy" (fixed code, returned to the app) until a real SMS provider is plugged in. */
+  get otpMode() {
+    return env('OTP_MODE') ?? 'dummy';
+  },
+  get dummyOtp() {
+    return env('DUMMY_OTP') ?? '123456';
+  },
+};
