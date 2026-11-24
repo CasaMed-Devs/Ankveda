@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Ankveda",
+    "slug": "ankveda",
+    "scheme": "ankveda",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/brand-mark.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#300810",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.ankveda.app"
+    },
+    "android": {
+      "package": "com.ankveda.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#300810",
+        "foregroundImage": "./assets/images/brand-mark.png"
+      },
+      "softwareKeyboardLayoutMode": "resize",
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      "expo-font",
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/brand-mark.png",
+          "imageWidth": 160,
+          "backgroundColor": "#300810"
+        }
+      ],
+      "expo-image"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
