@@ -12,6 +12,7 @@ import { fetchAudit, usePagedList } from '@/lib/queries';
 import type { AuditAction, AuditRow } from '@/lib/types';
 
 const ACTIONS: Record<AuditAction, { label: string; tone: Tone }> = {
+  'account.self_delete': { label: 'Account deleted by user', tone: 'warning' },
   'admin.login': { label: 'Admin login', tone: 'neutral' },
   'plan.create': { label: 'Plan created', tone: 'info' },
   'plan.update': { label: 'Plan changed', tone: 'info' },

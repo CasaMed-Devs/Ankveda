@@ -77,10 +77,17 @@ const runStep = async (userId: string, job: UserDeletionDoc, actor: AdminActor, 
       return;
     }
     case 'userData':
+      // Works for soft-deleted accounts too: the parent doc is gone but its subcollections remain.
       await db.recursiveDelete(refs.user(userId));
+      await refs.deletedAccounts().doc(userId).delete();
       return;
     case 'otp':
-      if (job.phone) await refs.otpChallenges().doc(job.phone).delete();
+      if (job.phone) {
+        await refs.otpChallenges().doc(job.phone).delete();
+        // Free the number only if it still points at this account (it may already have a new one).
+        const mappingRef = refs.phoneAccounts().doc(job.phone);
+        if ((await mappingRef.get()).data()?.userId === userId) await mappingRef.delete();
+      }
       return;
   }
 };
@@ -89,7 +96,11 @@ export const getDeletionJob = async (userId: string) => (await jobRef(userId).ge
 
 export const deleteUser = async (userId: string, actor: AdminActor) => {
   const now = Date.now();
-  const [user, existing] = await Promise.all([refs.user(userId).get().then((s) => s.data()), getDeletionJob(userId)]);
+  // An active account, or one the user already deleted from the app (snapshot in deletedAccounts).
+  const [user, existing] = await Promise.all([
+    refs.user(userId).get().then(async (s) => s.data() ?? (await refs.deletedAccounts().doc(userId).get()).data()),
+    getDeletionJob(userId),
+  ]);
   if (existing?.status === 'completed') return existing;
   if (!user && !existing) throw new HttpError(404, 'User not found.', 'not_found');
   if (existing?.status === 'running' && now - existing.updatedAt < STALE_RUN_MS) {

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Alert } from 'react-native';
 
+import { appAlert } from '@/components/AppAlert';
+import { toast } from '@/components/Toast';
 import { api, ApiError } from '@/lib/api';
 import { applyUser } from '@/lib/queries';
 import type { Plan } from '@/lib/types';
@@ -31,7 +32,7 @@ export const useSubscribe = () => {
   const subscribe = async (plan: Plan): Promise<boolean> => {
     const Razorpay = loadRazorpay();
     if (!Razorpay) {
-      Alert.alert('Payments unavailable', 'Razorpay needs the Ankveda development build. It does not run inside Expo Go.');
+      appAlert({ title: 'Payments unavailable', message: 'Razorpay needs the Ankveda development build. It does not run inside Expo Go.' });
       return false;
     }
 
@@ -53,14 +54,15 @@ export const useSubscribe = () => {
         signature: result.razorpay_signature,
       });
       applyUser(user);
+      if (user.entitlement.active) toast.success('Welcome to Ankveda Premium!');
       return user.entitlement.active;
     } catch (error) {
       if (error instanceof ApiError) {
-        Alert.alert('Subscription', error.message);
+        appAlert({ title: 'Subscription', message: error.message });
       } else {
         const failure = error as { code?: number; description?: string };
         if (!USER_CANCELLED_CODES.has(failure.code ?? -1)) {
-          Alert.alert('Payment not completed', failure.description ?? 'Your payment did not go through. Please try again.');
+          appAlert({ title: 'Payment not completed', message: failure.description ?? 'Your payment did not go through. Please try again.' });
         }
       }
       return false;

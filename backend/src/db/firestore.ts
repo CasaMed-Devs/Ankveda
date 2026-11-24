@@ -5,6 +5,9 @@ import { config } from '../config';
 import type {
   AdminOverviewDoc,
   AuditLogDoc,
+  CounterDoc,
+  DeletedAccountDoc,
+  PhoneAccountDoc,
   DailyStatsMonthDoc,
   UserDeletionDoc,
   ChatMessageDoc,
@@ -71,4 +74,7 @@ export const refs = {
   adminStats: () => db.collection('adminStats').withConverter(converter<AdminOverviewDoc>()),
   adminDailyStats: () => db.collection('adminDailyStats').withConverter(converter<DailyStatsMonthDoc>()),
   userDeletions: () => db.collection('userDeletions').withConverter(converter<UserDeletionDoc>()),
+  counters: () => db.collection('counters').withConverter(converter<CounterDoc>()),
+  phoneAccounts: () => db.collection('phoneAccounts').withConverter(converter<PhoneAccountDoc>()),
+  deletedAccounts: () => db.collection('deletedAccounts').withConverter(converter<DeletedAccountDoc>()),
 };

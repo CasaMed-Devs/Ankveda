@@ -12,6 +12,7 @@ import {
   type RazorpaySubscriptionLike,
 } from './billingRules';
 import { computeEntitlement } from './entitlement';
+import { issueInvoiceIfPaid } from './invoice';
 import { subscriptionIdForInvoice } from './razorpay';
 
 export type RazorpaySubscriptionEntity = RazorpaySubscriptionLike & { notes?: unknown };
@@ -150,6 +151,16 @@ export const recordTransaction = async (payment: RazorpayPaymentLike, subscripti
       planId: sub.planId,
       kind: transactionKindOf(payment, sub, hasCapturedFirstCharge),
     });
-    tx.set(txRef, { ...data, schemaVersion: SCHEMA_VERSION, createdAt: existing?.createdAt ?? now, updatedAt: now });
+    tx.set(txRef, {
+      ...data,
+      // The invoice number is issued once and must survive every later webhook (e.g. a refund).
+      invoiceNumber: existing?.invoiceNumber,
+      invoiceIssuedAt: existing?.invoiceIssuedAt,
+      schemaVersion: SCHEMA_VERSION,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
   });
+  // A captured payment gets its tax invoice number as soon as it is paid (idempotent).
+  await issueInvoiceIfPaid(payment.id);
 };

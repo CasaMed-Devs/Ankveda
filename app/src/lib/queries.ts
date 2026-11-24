@@ -18,6 +18,7 @@ export const keys = {
   reports: ['reports'] as const,
   report: (id: string) => ['reports', id] as const,
   chat: ['chat'] as const,
+  invoices: ['invoices'] as const,
 };
 
 /** Stores the fresh user and refreshes everything that depends on entitlement. */
@@ -27,6 +28,8 @@ export const applyUser = (user: User) => {
   void queryClient.invalidateQueries({ queryKey: keys.home });
   void queryClient.invalidateQueries({ queryKey: keys.daily });
   void queryClient.invalidateQueries({ queryKey: keys.chat });
+  // A purchase / restore may have produced a new invoice.
+  void queryClient.invalidateQueries({ queryKey: keys.invoices });
 };
 
 export const useMe = () => {
@@ -105,4 +108,10 @@ export const useSendChat = () => {
       }));
     },
   });
+};
+
+/** The user's tax invoices (trial + subscription payments), newest first. */
+export const useInvoices = () => {
+  const token = useAuthStore((s) => s.token);
+  return useQuery({ queryKey: keys.invoices, enabled: !!token, queryFn: async () => (await api.invoices()).invoices });
 };

@@ -34,6 +34,8 @@ import { getOverview, getSeries, rebuildSeries } from '../services/admin/stats';
 import { adminExpire, grantSubscription } from '../services/admin/subscriptionActions';
 import { istDateStart, isDateKey } from '../services/admin/time';
 import { getUserDetail } from '../services/admin/userDetail';
+import { getInvoice, listInvoices } from '../services/invoice';
+import { buildInvoiceHtml } from '../services/invoiceHtml';
 import { razorpayConfigured } from '../services/razorpay';
 import type { AuditAction } from '../types';
 
@@ -244,6 +246,26 @@ adminRouter.post(
   }),
 );
 
+// ── Invoices ─────────────────────────────────────────────────────────────────
+
+/** Every invoice of a user, including fully refunded payments (flagged). Grants never have one. */
+adminRouter.get(
+  '/admin/users/:id/invoices',
+  handle(async (req, res) => {
+    res.json({ invoices: await listInvoices(String(req.params.id), { includeRefunded: true }) });
+  }),
+);
+
+/** The printable tax invoice — the identical HTML document the app renders to PDF. */
+adminRouter.get(
+  '/admin/invoices/:paymentId',
+  handle(async (req, res) => {
+    const invoice = await getInvoice(String(req.params.paymentId));
+    if (!invoice) throw new HttpError(404, 'No invoice exists for this payment (not paid, or a complimentary grant).', 'not_found');
+    res.set('Content-Type', 'text/html; charset=utf-8').set('Cache-Control', 'no-store').send(buildInvoiceHtml(invoice));
+  }),
+);
+
 // ── Payments ─────────────────────────────────────────────────────────────────
 
 adminRouter.get(
@@ -311,6 +333,7 @@ adminRouter.put(
 // ── Audit log ────────────────────────────────────────────────────────────────
 
 const AUDIT_ACTIONS: AuditAction[] = [
+  'account.self_delete',
   'admin.login',
   'plan.create',
   'plan.update',

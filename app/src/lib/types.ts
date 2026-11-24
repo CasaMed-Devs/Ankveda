@@ -99,3 +99,39 @@ export type CheckoutSession = {
   description: string;
   phone: string;
 };
+
+/**
+ * GST tax invoice for one trial or subscription payment — mirrors backend/src/services/invoice.ts
+ * (kept in sync by hand). Money in rupees; instants as ISO strings. Computed by the backend.
+ */
+export type Invoice = {
+  id: string;
+  invoiceNumber: string;
+  type: 'trial' | 'monthly';
+  description: string;
+  status: 'paid';
+  paymentId: string;
+  subscriptionId: string | null;
+  paymentMethod: string | null;
+  paidAt: string;
+  periodStart: string;
+  periodEnd: string;
+  currency: string;
+  amount: number;
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  halfGstRatePercent: number;
+  customer: { name: string | null; phoneNumber: string };
+  appName: string;
+  sac: { code: string; description: string };
+  seller: {
+    brandName: string;
+    legalName: string;
+    addressLines: readonly string[];
+    gstin: string;
+    state: string;
+    stateCode: string;
+    supportEmail: string;
+  };
+};

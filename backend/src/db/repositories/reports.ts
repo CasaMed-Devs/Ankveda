@@ -1,4 +1,5 @@
 import { SCHEMA_VERSION, type ReportDoc, type ReportInput, type ReportType } from '../../types';
+import { isPremiumUser } from '../../services/entitlement';
 import { db, refs } from '../firestore';
 
 const LOCK_MS = 5 * 60_000;
@@ -68,14 +69,25 @@ export const reportsRepo = {
   /**
    * Claims a report for generation. Returns null if another runner holds the lock or it is not
    * waiting — so the Vercel inline runner and the Firebase trigger never process it twice.
+   *
+   * Paid-access gate: generation only ever starts for a user who has purchased the trial or the
+   * subscription (isPremiumUser). Checked here, inside the claim transaction, because every path
+   * that generates (inline runner, Firestore trigger, retries) goes through claim(). A report queued
+   * for a user without access is put back to "locked" and nothing is generated.
    */
   claim: (userId: string, reportId: string) =>
     db.runTransaction(async (tx) => {
       const ref = refs.reports(userId).doc(reportId);
-      const report = (await tx.get(ref)).data();
+      const [reportSnap, userSnap] = await Promise.all([tx.get(ref), tx.get(refs.user(userId))]);
+      const report = reportSnap.data();
+      const user = userSnap.data();
       const now = Date.now();
       if (!report || report.status !== 'processing') return null;
       if (report.lockedUntil && report.lockedUntil > now) return null;
+      if (!user || !isPremiumUser(user)) {
+        tx.set(ref, { ...report, status: 'locked', stage: 'received', error: null, lockedUntil: null, updatedAt: now });
+        return { blocked: true as const };
+      }
       const next: ReportDoc = { ...report, stage: 'numbers', attempts: report.attempts + 1, lockedUntil: now + LOCK_MS, updatedAt: now };
       tx.set(ref, next);
       return next;

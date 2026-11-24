@@ -1,7 +1,7 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Alert } from 'react-native';
 
+import { appAlert } from '@/components/AppAlert';
 import { useSubscribe } from '@/hooks/useSubscribe';
 import { api, ApiError } from '@/lib/api';
 import { keys, queryClient } from '@/lib/queries';
@@ -32,7 +32,7 @@ export const usePremiumCheckout = (reportId?: string) => {
       void queryClient.invalidateQueries({ queryKey: keys.reports, exact: true });
       router.replace(`/report/${reportId}/processing`);
     } catch (e) {
-      Alert.alert('Your report', e instanceof ApiError ? e.message : 'We could not start your report. Please try again.');
+      appAlert({ title: 'Your report', message: e instanceof ApiError ? e.message : 'We could not start your report. Please try again.' });
     } finally {
       setGenerating(false);
     }

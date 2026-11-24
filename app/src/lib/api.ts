@@ -7,6 +7,7 @@ import type {
   CheckoutSession,
   Daily,
   HomeSummary,
+  Invoice,
   Plan,
   Report,
   ReportInput,
@@ -63,6 +64,8 @@ export const api = {
 
   me: () => request<{ user: User }>('GET', '/me'),
   updateMe: (patch: { fullName?: string; dob?: string }) => request<{ user: User }>('PUT', '/me', patch),
+  /** Deletes the account from the app (data kept server-side); a running subscription is cancelled. */
+  deleteAccount: () => request<{ deleted: true; billingCancelled: number }>('DELETE', '/me'),
 
   home: () => request<HomeSummary>('GET', '/home'),
   daily: () => request<{ locked: boolean; daily?: Daily }>('GET', '/daily'),
@@ -79,6 +82,8 @@ export const api = {
   report: (id: string) => request<{ report: Report }>('GET', `/reports/${id}`),
   generateReport: (id: string) => request<{ report: Report }>('POST', `/reports/${id}/generate`),
   saveReport: (id: string, saved: boolean) => request<{ report: Report }>('POST', `/reports/${id}/save`, { saved }),
+
+  invoices: () => request<{ invoices: Invoice[] }>('GET', '/invoices'),
 
   chatHistory: () => request<{ locked: boolean; messages: ChatMessage[] }>('GET', '/chat/history'),
   sendChat: (text: string) => request<{ messages: ChatMessage[] }>('POST', '/chat', { text }),

@@ -53,5 +53,37 @@ export const api = async <T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: st
   return data as T;
 };
 
+/**
+ * Opens a payment's tax invoice — the identical document the app renders to PDF — in a new tab.
+ * The tab is opened synchronously (inside the click) so pop-up blockers allow it, then filled once the
+ * authenticated request returns. `print` opens the browser's print dialog for "Save as PDF".
+ */
+export const openInvoice = async (paymentId: string, opts: { print?: boolean } = {}) => {
+  const tab = window.open('', '_blank');
+  if (tab) tab.document.title = 'Loading invoice…';
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new ApiError(401, 'Please sign in.', 'unauthorized');
+    const res = await fetch(`${ENVIRONMENTS[currentEnv].api}/admin/invoices/${encodeURIComponent(paymentId)}`, {
+      headers: { Authorization: `Bearer ${await user.getIdToken()}` },
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(res.status, data.error ?? `Could not load the invoice (${res.status}).`);
+    }
+    const url = URL.createObjectURL(new Blob([await res.text()], { type: 'text/html' }));
+    if (!tab) {
+      window.location.assign(url); // pop-ups blocked: fall back to this tab
+      return;
+    }
+    tab.location.href = url;
+    if (opts.print) tab.addEventListener('load', () => tab.print(), { once: true });
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) {
+    tab?.close();
+    throw error;
+  }
+};
+
 export const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : typeof error === 'string' ? error : 'Something went wrong.';

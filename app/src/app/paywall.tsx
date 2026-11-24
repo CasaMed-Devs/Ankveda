@@ -1,6 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { LinkButton, PrimaryButton } from '@/components/Buttons';
@@ -9,6 +9,8 @@ import { Heading } from '@/components/Heading';
 import { PlanCard } from '@/components/PlanCard';
 import { Screen } from '@/components/Screen';
 import { usePremiumCheckout } from '@/hooks/usePremiumCheckout';
+import { appAlert } from '@/components/AppAlert';
+import { toast } from '@/components/Toast';
 import { api, ApiError } from '@/lib/api';
 import { describePlan } from '@/lib/plans';
 import { applyUser, useEntitlement, useFeaturedPlan } from '@/lib/queries';
@@ -36,10 +38,12 @@ export default function Paywall() {
     try {
       const { user, restored } = await api.restorePurchases();
       applyUser(user);
-      if (restored) goBack();
-      else Alert.alert('Restore purchases', 'We could not find an active subscription on this number.');
+      if (restored) {
+        toast.success('Welcome back — your Ankveda Premium access is active again.');
+        goBack();
+      } else appAlert({ title: 'Restore purchases', message: 'We could not find an active subscription on this number.' });
     } catch (e) {
-      Alert.alert('Restore purchases', e instanceof ApiError ? e.message : 'Please try again.');
+      appAlert({ title: 'Restore purchases', message: e instanceof ApiError ? e.message : 'Please try again.' });
     } finally {
       setRestoring(false);
     }
@@ -114,26 +118,29 @@ const MembershipView = () => {
   const [cancelling, setCancelling] = useState(false);
   const endDate = entitlement?.currentPeriodEnd ? new Date(entitlement.currentPeriodEnd).toLocaleDateString('en-IN') : '';
 
-  const cancel = () => {
-    Alert.alert('Cancel subscription', `You keep Premium until ${endDate || 'the end of this period'}. It will not renew.`, [
-      { text: 'Keep Premium', style: 'cancel' },
-      {
-        text: 'Cancel renewal',
-        style: 'destructive',
-        onPress: async () => {
-          setCancelling(true);
-          try {
-            const { user } = await api.cancelSubscription();
-            applyUser(user);
-          } catch (e) {
-            Alert.alert('Cancel subscription', e instanceof ApiError ? e.message : 'Please try again.');
-          } finally {
-            setCancelling(false);
-          }
+  const cancel = () =>
+    appAlert({
+      title: 'Cancel your subscription?',
+      message: `You keep Premium until ${endDate || 'the end of this period'}. It will not renew and you won't be charged again.`,
+      actions: [
+        {
+          label: 'Cancel renewal',
+          style: 'destructive',
+          // Progress and any error are shown inside the alert.
+          onPress: async () => {
+            setCancelling(true);
+            try {
+              const { user } = await api.cancelSubscription();
+              applyUser(user);
+              toast.success(`Renewal cancelled. Premium stays active until ${endDate || 'the end of this period'}.`);
+            } finally {
+              setCancelling(false);
+            }
+          },
         },
-      },
-    ]);
-  };
+        { label: 'Keep Premium', style: 'cancel' },
+      ],
+    });
 
   return (
     <Screen

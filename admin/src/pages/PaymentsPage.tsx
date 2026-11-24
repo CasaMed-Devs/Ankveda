@@ -2,6 +2,7 @@ import { CalendarDays, IndianRupee, Receipt, TrendingUp, Wallet } from 'lucide-r
 import { useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 
+import { InvoiceActions } from '@/components/InvoiceActions';
 import { PageIntro, useOpenUser, UserCell } from '@/components/layout/Page';
 import { TxStatusBadge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
@@ -67,6 +68,7 @@ export const PaymentsPage = () => {
       ),
     },
     { key: 'currency', header: 'Currency', cell: (t) => t.currency, hideBelow: 'xl' },
+    { key: 'invoice', header: 'Invoice', cell: (t) => <InvoiceActions tx={t} />, hideBelow: 'lg' },
     { key: 'date', header: 'Date', cell: (t) => <span className="whitespace-nowrap tabular">{dateTime(t.paymentCreatedAt)}</span>, hideBelow: 'md' },
     {
       key: 'status',

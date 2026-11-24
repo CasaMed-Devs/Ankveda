@@ -87,6 +87,24 @@ export type UserDoc = Audited & {
   lastLoginAt: number;
 };
 
+/**
+ * phoneAccounts/{phone} — the CURRENT account for a phone number. Login resolves through it, so after
+ * a user deletes their account the same number gets a brand-new account (new id, no history).
+ */
+export type PhoneAccountDoc = { userId: string; createdAt: number; updatedAt: number };
+
+/**
+ * deletedAccounts/{userId} — an account the user deleted from the app. The users/{id} doc moves here
+ * (snapshot); its subcollections (reports, chat, daily guidance), subscriptions, payments and invoices
+ * stay where they are, linked by the same id. Nothing is shown in the app again.
+ */
+export type DeletedAccountDoc = UserDoc & {
+  deletedAt: number;
+  deletedBy: 'user';
+  /** Razorpay subscriptions whose billing was cancelled as part of the deletion. */
+  billingCancelled: string[];
+};
+
 // ── Reports ──────────────────────────────────────────────────────────────────
 
 export const REPORT_TYPES = ['name', 'phone', 'birthdate', 'compatibility', 'career', 'future', 'car'] as const;
@@ -287,7 +305,13 @@ export type TransactionDoc = Audited & {
   capturedAt: number | null;
   failedAt: number | null;
   refundedAt: number | null;
+  /** Tax invoice number ("ANK-YYYYMM-000001"), assigned once when the payment is captured. */
+  invoiceNumber?: string;
+  invoiceIssuedAt?: number;
 };
+
+/** counters/invoices_{YYYYMM} — last invoice sequence issued in that IST month. */
+export type CounterDoc = { lastNumber: number; updatedAt: number };
 
 // ── Operational ──────────────────────────────────────────────────────────────
 
@@ -314,6 +338,7 @@ export type WebhookEventDoc = {
 };
 
 export type AuditAction =
+  | 'account.self_delete'
   | 'admin.login'
   | 'plan.create'
   | 'plan.update'

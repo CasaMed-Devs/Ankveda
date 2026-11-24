@@ -8,15 +8,16 @@ import { Timestamp, type Query } from 'firebase-admin/firestore';
 import { db, refs } from '../../db/firestore';
 import { uidForPhone } from '../../lib/auth';
 import { HttpError } from '../../lib/http';
-import type { AuditAction, AuditLogDoc, SubscriptionDoc, TransactionDoc, UserDoc } from '../../types';
+import type { AuditAction, AuditLogDoc, DeletedAccountDoc, SubscriptionDoc, TransactionDoc, UserDoc } from '../../types';
 import { accessBucketOf, capPeriodEnd } from '../billingRules';
+import { isInvoiceable } from '../invoice';
 import { runPage, type Page } from './paging';
 
 const ts = (ms: number) => Timestamp.fromMillis(ms);
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
-export const USER_STATUS_FILTERS = ['free', 'trial', 'active', 'cancelled', 'expired', 'granted'] as const;
+export const USER_STATUS_FILTERS = ['free', 'trial', 'active', 'cancelled', 'expired', 'granted', 'deleted'] as const;
 export type UserStatusFilter = (typeof USER_STATUS_FILTERS)[number];
 
 export type UserListQuery = {
@@ -31,6 +32,8 @@ export type UserListQuery = {
 
 export const userRow = (id: string, u: UserDoc, sub?: SubscriptionDoc | null) => ({
   id,
+  /** Set when the user deleted this account from the app (data kept; the number now signs in fresh). */
+  deleted: 'deletedAt' in u && typeof u.deletedAt === 'number' ? { at: u.deletedAt } : null,
   name: u.profile?.fullName ?? null,
   phone: u.phone,
   dob: u.profile?.dob ?? null,
@@ -70,6 +73,8 @@ const applyUserStatus = (q: Query<UserDoc>, status: UserStatusFilter) => {
       return q.where('entitlement.status', 'in', ['halted', 'completed', 'expired']);
     case 'granted':
       return q.where('entitlement.source', '==', 'admin_grant');
+    case 'deleted':
+      return q; // handled by listDeletedAccounts
   }
 };
 
@@ -90,6 +95,8 @@ export const listUsers = async (query: UserListQuery) => {
   const q = query.q?.trim();
   if (q) return searchUsers(q, query);
 
+  if (query.status === 'deleted') return listDeletedAccounts(query);
+
   let base: Query<UserDoc> = refs.users();
   if (query.status) base = applyUserStatus(base, query.status);
   if (query.planId) base = base.where('entitlement.planId', '==', query.planId);
@@ -103,6 +110,38 @@ export const listUsers = async (query: UserListQuery) => {
   return { ...(await toUserPage(page)), total, mode: 'list' as const };
 };
 
+/** Accounts users deleted from the app, newest deletion first (deletedAccounts collection). */
+const listDeletedAccounts = async (query: UserListQuery) => {
+  let base: Query<DeletedAccountDoc> = refs.deletedAccounts();
+  if (query.from) base = base.where('deletedAt', '>=', ts(query.from));
+  if (query.to) base = base.where('deletedAt', '<', ts(query.to));
+  const [page, total] = await Promise.all([
+    runPage(base, { field: 'deletedAt', direction: 'desc', instant: true, pageSize: query.pageSize, cursor: query.cursor }),
+    query.cursor ? Promise.resolve(null) : base.count().get().then((s) => s.data().count),
+  ]);
+  const subs = await currentSubscriptions(page.items);
+  return {
+    items: page.items.map((u) => userRow(u.id, u, subs.get(u.entitlement?.subscriptionId ?? ''))),
+    nextCursor: page.nextCursor,
+    total,
+    mode: 'list' as const,
+  };
+};
+
+/** Every account for a phone number: the current one (via phoneAccounts, or the legacy id) and deleted ones. */
+const accountsForPhone = async (phone: string) => {
+  const mapping = (await refs.phoneAccounts().doc(phone).get()).data();
+  const ids = [...new Set([mapping?.userId, uidForPhone(phone)].filter((v): v is string => !!v))];
+  const [active, deleted] = await Promise.all([
+    db.getAll(...ids.map((id) => refs.user(id))),
+    refs.deletedAccounts().where('phone', '==', phone).get(),
+  ]);
+  return [
+    ...active.filter((s) => s.exists).map((s) => ({ ...(s.data() as UserDoc), id: s.id })),
+    ...deleted.docs.map((d) => ({ ...d.data(), id: d.id })),
+  ];
+};
+
 /**
  * Search (filters do not apply while searching):
  *   u_…            exact user id
@@ -113,10 +152,15 @@ export const listUsers = async (query: UserListQuery) => {
 const searchUsers = async (raw: string, query: UserListQuery) => {
   const digits = raw.replace(/[\s+-]/g, '').replace(/^91(?=\d{10}$)/, '');
   if (/^u_[a-f0-9]{24}$/.test(raw) || /^[6-9]\d{9}$/.test(digits)) {
-    const id = raw.startsWith('u_') ? raw : uidForPhone(digits);
-    const snap = await refs.user(id).get();
-    const user = snap.data();
-    const items = user ? (await toUserPage({ items: [{ ...user, id }], nextCursor: null })).items : [];
+    let found: (UserDoc & { id: string })[];
+    if (raw.startsWith('u_')) {
+      const [active, deleted] = await Promise.all([refs.user(raw).get(), refs.deletedAccounts().doc(raw).get()]);
+      const doc = active.data() ?? deleted.data();
+      found = doc ? [{ ...doc, id: raw }] : [];
+    } else {
+      found = await accountsForPhone(digits);
+    }
+    const items = found.length ? (await toUserPage({ items: found, nextCursor: null })).items : [];
     return { items, nextCursor: null, total: items.length, mode: 'search' as const };
   }
   let field: string;
@@ -260,6 +304,9 @@ export const transactionRow = (
   errorDescription: t.errorDescription,
   paymentCreatedAt: t.paymentCreatedAt,
   capturedAt: t.capturedAt,
+  invoiceNumber: t.invoiceNumber ?? null,
+  /** Paid payments have a tax invoice (fully refunded ones too, for the admin). */
+  invoiceable: isInvoiceable(t, true),
 });
 
 export const listTransactions = async (query: {

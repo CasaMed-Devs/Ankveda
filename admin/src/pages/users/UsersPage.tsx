@@ -3,7 +3,7 @@ import { useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 
 import { PageIntro, useOpenUser, UserCell } from '@/components/layout/Page';
-import { AccessBadge, SourceBadge } from '@/components/ui/Badge';
+import { AccessBadge, Badge, SourceBadge } from '@/components/ui/Badge';
 import { IconButton } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { CopyText, InlineAlert } from '@/components/ui/Feedback';
@@ -22,6 +22,7 @@ const STATUS_OPTIONS = [
   { value: 'granted', label: 'Manually granted' },
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'expired', label: 'Expired / halted' },
+  { value: 'deleted', label: 'Deleted accounts' },
 ];
 
 export const subscriptionOfRow = (u: UserRow): ActionSubscription | null =>
@@ -82,7 +83,19 @@ export const UsersPage = () => {
         ),
       hideBelow: 'sm',
     },
-    { key: 'status', header: 'Subscription', cell: (u) => <AccessBadge access={u.access} /> },
+    {
+      key: 'status',
+      header: 'Subscription',
+      cell: (u) =>
+        u.deleted ? (
+          <div className="flex flex-col items-start gap-1">
+            <Badge tone="danger">Deleted</Badge>
+            <span className="text-[11px] text-ink-3">{date(u.deleted.at)}</span>
+          </div>
+        ) : (
+          <AccessBadge access={u.access} />
+        ),
+    },
     { key: 'start', header: 'Started', cell: (u) => <span className="whitespace-nowrap tabular">{date(u.subscriptionStartAt)}</span>, hideBelow: '2xl' },
     {
       key: 'expiry',
@@ -103,8 +116,8 @@ export const UsersPage = () => {
       hideBelow: 'sm',
       cell: (u) => (
         <div className="flex justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
-          <IconButton icon={Gift} label="Grant subscription" onClick={() => actions.open('grant', u)} />
-          <IconButton icon={Ban} label="Expire subscription" disabled={!u.entitlement?.subscriptionId} onClick={() => actions.open('expire', u, subscriptionOfRow(u))} />
+          <IconButton icon={Gift} label="Grant subscription" disabled={!!u.deleted} onClick={() => actions.open('grant', u)} />
+          <IconButton icon={Ban} label="Expire subscription" disabled={!!u.deleted || !u.entitlement?.subscriptionId} onClick={() => actions.open('expire', u, subscriptionOfRow(u))} />
           <IconButton icon={Trash} label="Delete user" className="hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-700 dark:hover:text-red-300" onClick={() => actions.open('delete', u)} />
         </div>
       ),

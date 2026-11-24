@@ -7,7 +7,7 @@ import { config } from '../config';
 import { otpRepo } from '../db/repositories/ops';
 import { usersRepo } from '../db/repositories/users';
 import { DAY_MS } from '../db/schema';
-import { hashCode, safeEqual, signUserToken, uidForPhone } from '../lib/auth';
+import { hashCode, safeEqual, signUserToken } from '../lib/auth';
 import { handle, HttpError, parseBody } from '../lib/http';
 import { logger } from '../lib/logger';
 import { todayIst } from '../services/daily';
@@ -92,8 +92,8 @@ authRouter.post(
     // Burn the code (one-time use) but keep the daily send counter.
     await otpRepo.consume(phone);
 
-    const userId = uidForPhone(phone);
-    const user = await usersRepo.upsertOnLogin(userId, phone);
+    // The phone's current account (a deleted account is never reopened — the number starts fresh).
+    const { userId, user } = await usersRepo.resolveOnLogin(phone);
     res.json({ token: signUserToken(userId, phone), user: publicUser(userId, user) });
   }),
 );

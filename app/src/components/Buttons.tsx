@@ -9,13 +9,13 @@ type ButtonProps = {
   onPress: () => void;
   loading?: boolean;
   disabled?: boolean;
-  /** gradient = default primary, solid = flat gold (Reports tab), card = maroon outline */
-  tone?: 'gradient' | 'solid' | 'card';
+  /** gradient = default primary, solid = flat gold (Reports tab), card = maroon outline, danger = destructive */
+  tone?: 'gradient' | 'solid' | 'card' | 'danger';
 };
 
 export const PrimaryButton = ({ label, onPress, loading, disabled, tone = 'gradient' }: ButtonProps) => {
   const inactive = disabled || loading;
-  const textColor = tone === 'card' ? colors.cream : colors.onGold;
+  const textColor = tone === 'card' ? colors.cream : tone === 'danger' ? colors.danger : colors.onGold;
 
   const inner = loading ? (
     <ActivityIndicator color={textColor} />
@@ -38,7 +38,7 @@ export const PrimaryButton = ({ label, onPress, loading, disabled, tone = 'gradi
           {inner}
         </LinearGradient>
       ) : (
-        <View style={[styles.surface, tone === 'solid' ? styles.solid : styles.card]}>{inner}</View>
+        <View style={[styles.surface, tone === 'solid' ? styles.solid : tone === 'danger' ? styles.danger : styles.card]}>{inner}</View>
       )}
     </Pressable>
   );
@@ -63,6 +63,7 @@ const styles = StyleSheet.create({
   surface: { height: 56, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
   solid: { backgroundColor: colors.gold },
   card: { backgroundColor: colors.card, borderWidth, borderColor: colors.border, borderRadius: radii.button },
+  danger: { backgroundColor: 'rgba(255, 155, 138, 0.08)', borderWidth: 1, borderColor: colors.danger, borderRadius: radii.button },
   label: { fontFamily: fonts.sansBold, fontSize: 15, lineHeight: 22 },
   link: { alignSelf: 'center', paddingVertical: 4 },
 });

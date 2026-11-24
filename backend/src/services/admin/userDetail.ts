@@ -6,7 +6,10 @@ import { auditRow, planNames, subscriptionRow, transactionRow, userRow } from '.
 
 /** Everything the user drawer shows, in a handful of bounded reads. */
 export const getUserDetail = async (userId: string) => {
-  const user = (await refs.user(userId).get()).data();
+  // Active account, or the snapshot of one the user deleted from the app (all its data is kept).
+  const [active, deletedSnap] = await Promise.all([refs.user(userId).get(), refs.deletedAccounts().doc(userId).get()]);
+  const deletedAccount = deletedSnap.data();
+  const user = active.data() ?? deletedAccount;
   if (!user) {
     const job = await getDeletionJob(userId);
     if (job) {
@@ -34,6 +37,7 @@ export const getUserDetail = async (userId: string) => {
       ...userRow(userId, user, current),
       countryCode: user.countryCode,
       profileCompletedAt: user.profileCompletedAt,
+      deletedByUser: deletedAccount && !active.exists ? { at: deletedAccount.deletedAt, billingCancelled: deletedAccount.billingCancelled.length } : null,
       numbers: user.profile?.numbers ?? null,
       updatedAt: user.updatedAt,
       reportCount,

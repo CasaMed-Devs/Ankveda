@@ -10,6 +10,8 @@ export type Paged<T> = { items: T[]; nextCursor: string | null; total?: number |
 
 export type UserRow = {
   id: string;
+  /** The user deleted this account from the app (data kept; the number now signs in as a new account). */
+  deleted: { at: number } | null;
   name: string | null;
   phone: string;
   dob: string | null;
@@ -84,9 +86,14 @@ export type TransactionRow = {
   errorDescription: string | null;
   paymentCreatedAt: number;
   capturedAt: number | null;
+  /** Tax invoice number (ANK-YYYYMM-000001) once issued. */
+  invoiceNumber: string | null;
+  /** Paid payment → it has a tax invoice (grants never do). */
+  invoiceable: boolean;
 };
 
 export type AuditAction =
+  | 'account.self_delete'
   | 'admin.login'
   | 'plan.create'
   | 'plan.update'
@@ -161,6 +168,7 @@ export type UserDetail = {
     numbers: { birth: number; lifePath: number; name: number } | null;
     updatedAt: number;
     reportCount: number;
+    deletedByUser: { at: number; billingCancelled: number } | null;
   };
   currentSubscription: (SubscriptionRow & { events: SubscriptionEvent[] }) | null;
   subscriptions: SubscriptionRow[];

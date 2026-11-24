@@ -5,6 +5,7 @@ import { isProfileComplete, ProfileIncompleteError, usersRepo } from '../db/repo
 import { uidOf } from '../lib/auth';
 import { handle, HttpError, parseBody } from '../lib/http';
 import { dobSchema, nameSchema } from '../lib/validation';
+import { deleteOwnAccount } from '../services/accountDeletion';
 import { getDaily } from '../services/daily';
 import { isPremiumUser, publicUser } from '../services/entitlement';
 import { ARCHETYPES } from '../services/numerology';
@@ -46,6 +47,17 @@ meRouter.put(
       if (error instanceof ProfileIncompleteError) throw new HttpError(400, error.message, 'validation');
       throw error;
     }
+  }),
+);
+
+/**
+ * "Delete account": the account disappears from the app (data kept in the database), any running
+ * subscription is cancelled, and the same number signs in as a brand-new user afterwards.
+ */
+meRouter.delete(
+  '/me',
+  handle(async (req, res) => {
+    res.json(await deleteOwnAccount(uidOf(req)));
   }),
 );
 

@@ -1,8 +1,9 @@
 import { Ban, Gift, Receipt, Trash } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
+import { InvoiceActions } from '@/components/InvoiceActions';
 import { DescList } from '@/components/layout/Page';
-import { AccessBadge, SourceBadge, SubStatusBadge, SUB_STATUS, TxStatusBadge } from '@/components/ui/Badge';
+import { AccessBadge, Badge, SourceBadge, SubStatusBadge, SUB_STATUS, TxStatusBadge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Avatar, CopyText, EmptyState, ErrorState, InlineAlert, Skeleton } from '@/components/ui/Feedback';
@@ -81,6 +82,16 @@ const OverviewTab = ({ d, onExpire }: { d: UserDetail; onExpire: () => void }) =
   const s = d.currentSubscription;
   return (
     <div className="flex flex-col gap-4">
+      {d.user.deletedByUser && (
+        <InlineAlert tone="warning">
+          <p className="font-semibold">Deleted by the user on {dateTime(d.user.deletedByUser.at)}.</p>
+          <p>
+            The account is gone from the app and its data is kept here
+            {d.user.deletedByUser.billingCancelled ? ` (${d.user.deletedByUser.billingCancelled} subscription cancelled at deletion)` : ''}. If this number
+            signs in again it gets a brand-new account.
+          </p>
+        </InlineAlert>
+      )}
       {d.deletion && (
         <InlineAlert tone="danger">
           A deletion of this user stopped: {d.deletion.lastError ?? 'unknown error'}. Use “Delete user” to resume it.
@@ -127,7 +138,7 @@ const OverviewTab = ({ d, onExpire }: { d: UserDetail; onExpire: () => void }) =
 const PaymentsTab = ({ d }: { d: UserDetail }) =>
   d.transactions.length === 0 ? (
     <Card>
-      <EmptyState icon={Receipt} title="No payments" body={d.currentSubscription?.source === 'admin_grant' ? 'Complimentary access — nothing was charged.' : undefined} />
+      <EmptyState icon={Receipt} title="No payments" body={d.currentSubscription?.source === 'admin_grant' ? 'Complimentary access — nothing was charged, so there is no invoice.' : undefined} />
     </Card>
   ) : (
     <Card className="divide-y divide-line">
@@ -145,7 +156,10 @@ const PaymentsTab = ({ d }: { d: UserDetail }) =>
             {t.errorDescription && <p className="text-[12px] text-red-700 dark:text-red-400">{t.errorDescription}</p>}
             <CopyText value={t.razorpayPaymentId} className="mt-0.5" />
           </div>
-          <TxStatusBadge status={t.status} />
+          <div className="flex flex-col items-end gap-1.5">
+            <TxStatusBadge status={t.status} />
+            <InvoiceActions tx={t} compact />
+          </div>
         </div>
       ))}
     </Card>
@@ -239,7 +253,7 @@ export const UserDrawer = ({ userId, onClose }: { userId: string | null; onClose
               <div className="min-w-0">
                 <h2 className="truncate text-base font-semibold text-ink">{u.name ?? 'Name not set'}</h2>
                 <p className="flex flex-wrap items-center gap-2 text-[13px] text-ink-3">
-                  {phone(u.phone)} <AccessBadge access={u.access} />
+                  {phone(u.phone)} {u.deleted ? <Badge tone="danger">Deleted account</Badge> : <AccessBadge access={u.access} />}
                 </p>
               </div>
             </div>
@@ -259,14 +273,18 @@ export const UserDrawer = ({ userId, onClose }: { userId: string | null; onClose
         ) : (
           <div className="flex flex-col gap-4 p-5">
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="primary" icon={Gift} onClick={() => actions.open('grant', u)}>
-                Grant subscription
-              </Button>
-              <Button size="sm" icon={Ban} disabled={!sub} onClick={() => actions.open('expire', u, actionSub)}>
-                Expire subscription
-              </Button>
+              {!d.user.deletedByUser && (
+                <>
+                  <Button size="sm" variant="primary" icon={Gift} onClick={() => actions.open('grant', u)}>
+                    Grant subscription
+                  </Button>
+                  <Button size="sm" icon={Ban} disabled={!sub} onClick={() => actions.open('expire', u, actionSub)}>
+                    Expire subscription
+                  </Button>
+                </>
+              )}
               <Button size="sm" variant="dangerGhost" icon={Trash} onClick={() => actions.open('delete', u)} className="sm:ml-auto">
-                Delete user
+                {d.user.deletedByUser ? 'Delete permanently' : 'Delete user'}
               </Button>
             </div>
             <Segmented
@@ -275,7 +293,7 @@ export const UserDrawer = ({ userId, onClose }: { userId: string | null; onClose
               onChange={setTab}
               options={[
                 { value: 'overview', label: 'Overview' },
-                { value: 'payments', label: `Payments (${d.transactions.length})` },
+                { value: 'payments', label: `Payments & invoices (${d.transactions.length})` },
                 { value: 'history', label: 'History' },
                 { value: 'audit', label: 'Admin actions' },
               ]}

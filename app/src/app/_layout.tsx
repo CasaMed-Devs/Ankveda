@@ -18,6 +18,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { AlertProvider } from '@/components/AppAlert';
+import { ToastProvider } from '@/components/Toast';
 import { useAuthStore } from '@/lib/auth-store';
 import { queryClient } from '@/lib/queries';
 import { colors } from '@/theme/tokens';
@@ -48,6 +50,8 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
+        <AlertProvider>
+        <ToastProvider>
         <StatusBar style="light" />
         <Stack
           screenOptions={{
@@ -74,8 +78,12 @@ export default function RootLayout() {
             <Stack.Screen name="report/[id]/processing" options={{ gestureEnabled: false }} />
             <Stack.Screen name="astrologer" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="profile-details" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="invoices/index" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="invoices/[id]" options={{ animation: 'slide_from_right' }} />
           </Stack.Protected>
         </Stack>
+        </ToastProvider>
+        </AlertProvider>
       </QueryClientProvider>
     </SafeAreaProvider>
   );

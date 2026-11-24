@@ -27,7 +27,9 @@ Code: types in `backend/src/types.ts`, typed refs in `backend/src/db/firestore.t
 
 | Collection | Document id | Purpose | References |
 |---|---|---|---|
-| `users` | `u_` + sha256("+91"+phone)[:24] | Account, profile (name, DOB, derived numbers), entitlement cache, chat session | — |
+| `users` | `u_` + 24 hex — random for accounts created now; `sha256("+91"+phone)[:24]` for older ones | **Active** accounts only: profile (name, DOB, derived numbers), entitlement cache, chat session | — |
+| `phoneAccounts` | phone (10 digits) | The phone number's **current** account (`userId`). Login resolves through it; removed when that account is deleted | `userId` → users |
+| `deletedAccounts` | user id | Snapshot of an account the user deleted from the app (`deletedAt`, `deletedBy`, `billingCancelled`). Its subcollections, subscriptions, payments and invoices stay in place under the same id | — |
 | `users/{id}/reports` | auto | One numerology report (input, status, generated content) | parent user; `userId` denormalised for collection-group queries |
 | `users/{id}/chatMessages` | auto | Astrologer chat history | parent user |
 | `users/{id}/dailyGuidance` | `YYYY-MM-DD` (IST) | Daily lucky number, time, message (TTL 30 days) | parent user |
@@ -35,6 +37,7 @@ Code: types in `backend/src/types.ts`, typed refs in `backend/src/db/firestore.t
 | `subscriptions` | **Razorpay subscription id** | Subscription state, `planSnapshot` (terms at purchase), Razorpay plan/customer ids, paid/total cycles, next charge, `subscriptionActivatedAt` (when the user got the subscription, counting the trial — set when the ₹49 trial starts, or at the first charge for plans without a trial; set once) | `userId` → users, `planId` → plans |
 | `subscriptions/{id}/events` | auto | Append-only status history (`fromStatus → toStatus`, Razorpay event id) | parent subscription |
 | `transactions` | **Razorpay payment id** | Every payment attempt: trial ₹49, first charge, renewals, failures (with reason), refunds | `subscriptionId` → subscriptions, `userId`, `planId` |
+| `counters` | `invoices_{YYYYMM}` (IST) | Last tax-invoice sequence issued that month (`lastNumber`) — never reset or reused | — |
 | `otpChallenges` | phone | Hashed login code, attempts (TTL) | — |
 | `webhookEvents` | Razorpay event id | Exactly-once webhook processing (TTL 30 days) | — |
 | `adminAuditLog` | auto (`login_{uid}_{authTime}` for logins) | Append-only admin audit: `action`, `actor {uid,email}`, `targetUserId`, `subscriptionId`, `planId`, `details`. Written only by the backend, in the same transaction as the change. Entries from before admin accounts have no `actor` | `targetUserId` → users, `planId` → plans |
@@ -53,6 +56,7 @@ Code: types in `backend/src/types.ts`, typed refs in `backend/src/db/firestore.t
 | `subscriptions.adminAction` | Last admin action (`cancel_renewal` / `expire_now`), who, when, notes |
 | `plans.trialEnabled` | `false` = no trial for new subscribers while keeping the configured days/amount (`effectiveTerms()`); missing = on |
 | `plans.updatedBy` | Admin who last changed the plan |
+| `transactions.invoiceNumber`, `invoiceIssuedAt` | GST tax invoice `ANK-YYYYMM-000001`, issued once when the payment is captured (`services/invoice.ts`); kept through every later webhook |
 
 ## Design decisions
 
@@ -92,6 +96,24 @@ users/{userId}.entitlement.subscriptionId ──► subscriptions/{sub_…} ◄�
 Rules: webhook deliveries are processed once (`webhookEvents`), transaction statuses never move backwards when webhooks arrive out of order, and payments for subscriptions Ankveda did not create are ignored (the Razorpay account is shared with other apps).
 
 Current plan: **Ankveda Premium** — 5-day trial **₹49**, then **₹299 / month** (Razorpay `plan_U42bTOOMKoDkmS`, featured). Change pricing from the admin dashboard → Paywall & Pricing (trial edits in place; a new monthly amount creates or links a new Razorpay plan and archives the old one).
+
+## Accounts, phone numbers and deletion
+
+A phone number and an account are separate things. Login (`usersRepo.resolveOnLogin`, one transaction):
+1. `phoneAccounts/{phone}` → that account;
+2. else an older account keyed by the phone hash → adopted as is (no migration) and the mapping written;
+3. else a brand-new account with a random id.
+
+**Delete account** (`DELETE /me`, `services/accountDeletion.ts`): any still-billable Razorpay subscription is cancelled first (immediately — if it can't be, nothing is deleted). Then, atomically: `users/{id}` is copied to `deletedAccounts/{id}` and removed, and `phoneAccounts/{phone}` is removed. **Nothing else is deleted**: `users/{id}/reports|chatMessages|dailyGuidance` stay (Firestore keeps subcollections when the parent doc is removed), and so do subscriptions, transactions and invoices. The old token stops working (no `users/{id}`), and the next login with that number creates a new account — no history, no subscription, trial offered again. Admins see these accounts under *Users → Deleted accounts*; *Delete permanently* (admin) removes everything, including the snapshot.
+
+## Tax invoices
+
+One GST tax invoice per paid payment (`transactions/{pay_…}` with status captured / partially refunded / refunded). Same seller and template as Astro108 (`backend/src/config/invoice.ts`, `services/invoiceHtml.ts`); GST-inclusive, split CGST 9% + SGST 9%, SAC 998439.
+
+- **Numbering** `ANK-YYYYMM-000001` from `counters/invoices_{YYYYMM}` in a transaction — atomic, idempotent, issued when the payment is captured (older payments get theirs on first read). Ankveda's own series, so it never collides with Astro108's `INV-…` under the same GSTIN.
+- **Content** comes from what was paid: the transaction amount and the subscription's `planSnapshot` (plan name, period, trial days). Price changes never alter old invoices; new payments use new prices automatically.
+- **Admin grants never have an invoice** (they create no transaction). Fully refunded payments are hidden from the user's list (`GET /invoices`) but shown to admins (`GET /admin/users/:id/invoices`, printable `GET /admin/invoices/:paymentId`).
+- The app renders the same HTML to a PDF on-device (`app/src/lib/invoices`).
 
 ## Integrity rules (Firestore has no FK constraints, so the repositories enforce them)
 

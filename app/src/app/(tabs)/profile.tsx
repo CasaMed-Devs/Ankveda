@@ -1,22 +1,34 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Linking, Pressable, StyleSheet, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, View } from 'react-native';
 
+import { useAppAlert } from '@/components/AppAlert';
 import { AppText } from '@/components/AppText';
+import { PrimaryButton } from '@/components/Buttons';
 import { ArrowCard } from '@/components/Cards';
 import { Screen } from '@/components/Screen';
+import { useToast } from '@/components/Toast';
 import { api, ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { LEGAL_URLS } from '@/lib/config';
 import { formatLongDate, formatPhone } from '@/lib/format';
 import { applyUser, queryClient, useEntitlement, useMe } from '@/lib/queries';
-import { colors } from '@/theme/tokens';
+import { borderWidth, colors, radii } from '@/theme/tokens';
+
+/** Ends the local session: token, cached data, back to the start. */
+const endSession = async () => {
+  await useAuthStore.getState().signOut();
+  queryClient.clear();
+  router.replace('/');
+};
 
 /** 21 · Profile */
 export default function Profile() {
   const me = useMe();
   const { isPremium, entitlement } = useEntitlement();
   const [restoring, setRestoring] = useState(false);
+  const alert = useAppAlert();
+  const toast = useToast();
   const user = me.data;
 
   const restore = async () => {
@@ -24,31 +36,56 @@ export default function Profile() {
     try {
       const { user: fresh, restored } = await api.restorePurchases();
       applyUser(fresh);
-      Alert.alert(
-        'Restore purchases',
-        restored ? 'Your Ankveda Premium access is active again.' : 'We could not find an active subscription on this number.',
-      );
+      if (restored) toast.success('Your Ankveda Premium access is active again.');
+      else alert({ title: 'Restore purchases', message: 'We could not find an active subscription on this number.' });
     } catch (e) {
-      Alert.alert('Restore purchases', e instanceof ApiError ? e.message : 'Please try again.');
+      alert({ title: 'Restore purchases', message: e instanceof ApiError ? e.message : 'Please try again.' });
     } finally {
       setRestoring(false);
     }
   };
 
-  const signOut = () => {
-    Alert.alert('Sign out', 'You can sign back in anytime with your mobile number.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: async () => {
-          await useAuthStore.getState().signOut();
-          queryClient.clear();
-          router.replace('/');
+  const confirmSignOut = () =>
+    alert({
+      title: 'Sign out of Ankveda?',
+      message: 'You can sign back in anytime with your mobile number. Your readings stay saved.',
+      actions: [
+        {
+          label: 'Sign out',
+          onPress: async () => {
+            await endSession();
+            toast.info('You have been signed out.');
+          },
         },
-      },
-    ]);
-  };
+        { label: 'Cancel', style: 'cancel' },
+      ],
+    });
+
+  const confirmDelete = () =>
+    alert({
+      title: 'Delete your account?',
+      message: 'Your Ankveda account will be removed from the app.',
+      bullets: [
+        'Your profile, reports, chat and daily guidance will no longer be available.',
+        ...(isPremium ? ['Your Ankveda Premium subscription will be cancelled now — no further charges and no refund.'] : []),
+        'Signing in again with this number starts a brand-new account.',
+        'This cannot be undone.',
+      ],
+      confirmText: 'DELETE',
+      actions: [
+        {
+          label: 'Delete account',
+          style: 'destructive',
+          onPress: async () => {
+            // Errors (e.g. the subscription could not be cancelled) stay inside the alert.
+            await api.deleteAccount();
+            await endSession();
+            toast.success('Your account has been deleted.');
+          },
+        },
+        { label: 'Cancel', style: 'cancel' },
+      ],
+    });
 
   const premiumSubtitle = isPremium
     ? `${entitlement?.planName ?? 'Premium'} · ${entitlement?.cancelAtPeriodEnd ? 'ends' : 'renews'} ${
@@ -75,16 +112,31 @@ export default function Profile() {
           onPress={() => router.push('/profile-details')}
         />
         <ArrowCard title="Ankveda Premium" subtitle={premiumSubtitle} onPress={() => router.push('/paywall')} />
-        <ArrowCard
-          title="Purchases & reports"
-          subtitle="Your access and saved readings"
-          onPress={() => router.navigate('/reports')}
-        />
-        <ArrowCard
-          title={restoring ? 'Restoring…' : 'Restore purchases'}
-          subtitle="Reconnect your existing access"
-          onPress={restore}
-        />
+        <ArrowCard title="Invoices" subtitle="Tax invoices for your trial and subscription" onPress={() => router.push('/invoices')} />
+        <ArrowCard title="Purchases & reports" subtitle="Your access and saved readings" onPress={() => router.navigate('/reports')} />
+        <ArrowCard title={restoring ? 'Restoring…' : 'Restore purchases'} subtitle="Reconnect your existing access" onPress={restore} />
+      </View>
+
+      <View style={styles.account}>
+        <AppText variant="eyebrow">Account</AppText>
+        <PrimaryButton label="Sign out" tone="card" onPress={confirmSignOut} />
+        <Pressable
+          onPress={confirmDelete}
+          accessibilityRole="button"
+          accessibilityLabel="Delete account"
+          accessibilityHint="Removes your account from Ankveda after confirmation"
+          style={({ pressed }) => [styles.deleteRow, pressed && styles.pressed]}
+        >
+          <View style={styles.deleteText}>
+            <AppText variant="bodyCream" color={colors.danger}>
+              Delete account
+            </AppText>
+            <AppText variant="caption">Remove your account and data from the app</AppText>
+          </View>
+          <AppText variant="arrow" color={colors.danger}>
+            →
+          </AppText>
+        </Pressable>
       </View>
 
       <View style={styles.footer}>
@@ -100,11 +152,6 @@ export default function Profile() {
         <AppText variant="caption" align="center" color={colors.gold}>
           Ancient wisdom, a little closer to you.
         </AppText>
-        <Pressable onPress={signOut} hitSlop={10} accessibilityRole="button" style={styles.signOut}>
-          <AppText variant="caption" align="center">
-            Sign out
-          </AppText>
-        </Pressable>
       </View>
     </Screen>
   );
@@ -115,6 +162,19 @@ const styles = StyleSheet.create({
   identity: { gap: 16 },
   name: { fontSize: 42 },
   rows: { marginTop: 44, gap: 16 },
-  footer: { marginTop: 44, gap: 22 },
-  signOut: { alignSelf: 'center', paddingVertical: 4 },
+  account: { marginTop: 36, gap: 14 },
+  deleteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderRadius: radii.button,
+    borderWidth,
+    borderColor: 'rgba(255, 155, 138, 0.45)',
+    backgroundColor: 'rgba(255, 155, 138, 0.06)',
+  },
+  deleteText: { flex: 1, gap: 2 },
+  pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
+  footer: { marginTop: 36, gap: 22 },
 });

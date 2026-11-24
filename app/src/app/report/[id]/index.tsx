@@ -5,7 +5,9 @@ import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { Card } from '@/components/Cards';
 import { Screen } from '@/components/Screen';
-import { goReports } from '@/lib/navigation';
+import { toast } from '@/components/Toast';
+import { ApiError } from '@/lib/api';
+import { goHome, goReports } from '@/lib/navigation';
 import { useEntitlement, useReport, useSaveReport } from '@/lib/queries';
 import { getReportType } from '@/lib/report-types';
 import { colors, fonts } from '@/theme/tokens';
@@ -52,11 +54,24 @@ export default function ReportResult() {
       headerAction={{ label: 'Reports', onPress: goReports }}
       footer={
         <>
-          <PrimaryButton
-            label={data.saved ? 'Saved to Reports  ✓' : 'Save report'}
-            onPress={() => save.mutate({ id, saved: !data.saved })}
-            loading={save.isPending}
-          />
+          {data.saved ? (
+            // Already saved: take the user home (closes the stacked report screens).
+            <PrimaryButton label="Go to Home" onPress={goHome} />
+          ) : (
+            <PrimaryButton
+              label="Save report"
+              onPress={() =>
+                save.mutate(
+                  { id, saved: true },
+                  {
+                    onSuccess: () => toast.success('Report saved to your Reports.'),
+                    onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not save the report. Please try again.'),
+                  },
+                )
+              }
+              loading={save.isPending}
+            />
+          )}
           <AppText variant="caption" align="center" style={styles.basis}>
             {content.basis}
             {'\n'}For reflection and guidance, not a prediction.

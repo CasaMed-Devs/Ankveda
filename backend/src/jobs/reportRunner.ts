@@ -12,6 +12,11 @@ import { generateReportContent } from '../services/reportGenerator';
 export const processReport = async (userId: string, reportId: string) => {
   const report = await reportsRepo.claim(userId, reportId);
   if (!report) return;
+  if ('blocked' in report) {
+    // No trial / subscription purchased: never generate. The report is back to "locked" (preview + unlock).
+    logger.warn('Report generation blocked: user has no paid access', { userId, reportId });
+    return;
+  }
 
   try {
     const { content, generator } = await generateReportContent(report, async (stage) => {
