@@ -5,7 +5,7 @@ import { StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { Heading } from '@/components/Heading';
-import { Screen } from '@/components/Screen';
+import { FooterNote, Screen } from '@/components/Screen';
 import { goHome } from '@/lib/navigation';
 import { useGenerateReport, useReport } from '@/lib/queries';
 import { getReportType } from '@/lib/report-types';
@@ -41,9 +41,9 @@ export default function Processing() {
     <Screen
       footer={
         <>
-          <AppText variant="small" align="center">
+          <FooterNote>
             You can leave this screen.{'\n'}Your report will appear in Reports when ready.
-          </AppText>
+          </FooterNote>
           {failed ? (
             <PrimaryButton label="Try again" onPress={() => retry.mutate(id)} loading={retry.isPending} />
           ) : (

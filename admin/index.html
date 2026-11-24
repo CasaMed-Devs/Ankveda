@@ -1,110 +1,27 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#080d1a" />
+    <script>
+      // Apply the saved theme before first paint (dark by default) — no white flash.
+      try {
+        if (localStorage.getItem('ankveda.admin.theme') === 'light') document.documentElement.dataset.theme = 'light';
+      } catch (e) {}
+    </script>
     <title>Ankveda Admin</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=DM+Sans:wght@400;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="admin.css" />
   </head>
   <body>
-    <main>
-      <header class="top">
-        <h1>Ankveda <span>Admin</span></h1>
-        <div class="top-actions">
-          <label class="env">Environment
-            <select id="env">
-              <option value="production">Production (Firebase)</option>
-              <option value="staging">Staging (Vercel)</option>
-            </select>
-          </label>
-          <button id="logout" class="link" hidden>Sign out</button>
-        </div>
-      </header>
-
-      <section id="login-view" class="card narrow">
-        <h2>Sign in</h2>
-        <form id="login-form">
-          <label>Admin password <input type="password" name="password" required autocomplete="current-password" /></label>
-          <button type="submit" class="primary">Sign in</button>
-          <p class="error" id="login-error" role="alert"></p>
-        </form>
-      </section>
-
-      <div id="app-view" hidden>
-        <nav class="tabs" role="tablist">
-          <button role="tab" data-tab="plans" aria-selected="true">Plans</button>
-          <button role="tab" data-tab="users" aria-selected="false">Users</button>
-          <button role="tab" data-tab="subscriptions" aria-selected="false">Subscriptions</button>
-          <button role="tab" data-tab="payments" aria-selected="false">Payments</button>
-        </nav>
-
-        <section data-panel="plans">
-          <p class="notice" id="razorpay-notice" hidden>
-            Razorpay keys are not set on the server — plans cannot be created until RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are configured.
-          </p>
-          <div class="card">
-            <h2>Plans</h2>
-            <p class="muted">
-              The paywall shows the one <strong>featured</strong> plan. Razorpay plans cannot change price or duration —
-              to change pricing, create a new plan, mark it featured, and deactivate the old one.
-            </p>
-            <div class="table-wrap"><table id="plans-table"></table></div>
-          </div>
-
-          <div class="card">
-            <h2>Create plan</h2>
-            <form id="plan-form" class="grid">
-              <label>Name <input name="name" required maxlength="60" placeholder="Ankveda Premium Monthly" /></label>
-              <label>Description <input name="description" maxlength="200" placeholder="All reports, daily guidance & chat" /></label>
-              <label>Price (₹) <input name="price" type="number" min="1" step="0.01" required placeholder="499" /></label>
-              <label>Billing period
-                <select name="period">
-                  <option value="monthly">Monthly</option>
-                  <option value="yearly">Yearly</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="daily">Daily</option>
-                </select>
-              </label>
-              <label>Every (interval) <input name="interval" type="number" min="1" max="12" value="1" required /></label>
-              <label>Trial days <input name="trialDays" type="number" min="0" max="90" value="0" /></label>
-              <label>Trial price (₹) <input name="trialPrice" type="number" min="0" step="0.01" value="0" /></label>
-              <label class="check"><input name="featured" type="checkbox" checked /> Featured on paywall</label>
-              <label class="check"><input name="active" type="checkbox" checked /> Active</label>
-              <p class="preview" id="plan-preview" aria-live="polite"></p>
-              <button type="submit" class="primary">Create plan</button>
-              <p class="error" id="plan-error" role="alert"></p>
-            </form>
-          </div>
-        </section>
-
-        <section data-panel="users" hidden>
-          <div class="card">
-            <h2>Users</h2>
-            <div class="table-wrap"><table id="users-table"></table></div>
-          </div>
-        </section>
-
-        <section data-panel="subscriptions" hidden>
-          <div class="card">
-            <h2>Subscriptions</h2>
-            <div class="table-wrap"><table id="subs-table"></table></div>
-          </div>
-        </section>
-
-        <section data-panel="payments" hidden>
-          <div class="card">
-            <h2>Payments</h2>
-            <div class="table-wrap"><table id="payments-table"></table></div>
-          </div>
-        </section>
-      </div>
-    </main>
-    <script src="admin.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,9 +1,15 @@
 import { useRef, useState, type ComponentRef } from 'react';
 import { Pressable, StyleSheet, TextInput, View, type TextInputProps } from 'react-native';
 
-import { AppText } from '@/components/AppText';
+import { AppText, useTextScaleProps } from '@/components/AppText';
 import { borderWidth, colors, fonts, radii } from '@/theme/tokens';
 import { digitsToIsoDate, isoDateToDigits } from '@/lib/format';
+
+/** TextInput with the app-wide text scaling policy (see AppText). */
+export const Input = (props: TextInputProps & { ref?: React.Ref<ComponentRef<typeof TextInput>> }) => {
+  const scale = useTextScaleProps();
+  return <TextInput {...scale} {...props} />;
+};
 
 type FieldShellProps = { label: string; error?: string; hint?: string; children: React.ReactNode };
 
@@ -12,11 +18,13 @@ const FieldShell = ({ label, error, hint, children }: FieldShellProps) => (
     <AppText variant="label">{label}</AppText>
     {children}
     {error ? (
-      <AppText variant="small" color={colors.danger}>
+      <AppText variant="small" color={colors.danger} style={styles.hint}>
         {error}
       </AppText>
     ) : hint ? (
-      <AppText variant="small">{hint}</AppText>
+      <AppText variant="small" style={styles.hint}>
+        {hint}
+      </AppText>
     ) : null}
   </View>
 );
@@ -26,7 +34,7 @@ type TextFieldProps = Omit<TextInputProps, 'style'> & { label: string; error?: s
 export const TextField = ({ label, error, hint, ...input }: TextFieldProps) => (
   <FieldShell label={label} error={error} hint={hint}>
     <View style={[styles.box, error && styles.boxError]}>
-      <TextInput
+      <Input
         placeholderTextColor="rgba(215, 185, 182, 0.55)"
         selectionColor={colors.gold}
         style={styles.input}
@@ -52,7 +60,7 @@ export const PhoneField = ({ label, value, onChangeText, error, hint, showCountr
   <FieldShell label={label} error={error} hint={hint}>
     <View style={[styles.box, styles.row, error && styles.boxError]}>
       {showCountryCode ? <AppText style={styles.prefix}>+91</AppText> : null}
-      <TextInput
+      <Input
         value={formatPhoneForInput(value)}
         onChangeText={(text) => onChangeText(text.replace(/\D/g, '').slice(0, 10))}
         keyboardType="phone-pad"
@@ -101,7 +109,7 @@ export const DateField = ({ label, value, onChange, error }: DateFieldProps) => 
   return (
     <FieldShell label={label} error={error}>
       <View style={[styles.box, error && styles.boxError]}>
-        <TextInput
+        <Input
           value={maskDate(digits)}
           onChangeText={handleChange}
           keyboardType="number-pad"
@@ -183,7 +191,7 @@ export const OtpInput = ({ value, onChange, length = 6 }: OtpInputProps) => {
           </View>
         );
       })}
-      <TextInput
+      <Input
         ref={inputRef}
         value={value}
         onChangeText={(t) => onChange(t.replace(/\D/g, '').slice(0, length))}
@@ -203,6 +211,8 @@ export const OtpInput = ({ value, onChange, length = 6 }: OtpInputProps) => {
 
 const styles = StyleSheet.create({
   field: { gap: 8 },
+  // Figma: 10 between the input box and its helper / error line.
+  hint: { marginTop: 2 },
   box: {
     backgroundColor: colors.input,
     borderWidth,

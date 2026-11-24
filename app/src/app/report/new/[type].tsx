@@ -2,12 +2,11 @@ import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { InfoCard } from '@/components/Cards';
 import { DateField, OptionField, PhoneField, TextField } from '@/components/Fields';
 import { Heading } from '@/components/Heading';
-import { Screen } from '@/components/Screen';
+import { FooterNote, Screen } from '@/components/Screen';
 import { ApiError } from '@/lib/api';
 import { useCreateReport, useMe } from '@/lib/queries';
 import { FIELD_LABELS, getReportType, PERIOD_OPTIONS, type ReportField } from '@/lib/report-types';
@@ -175,13 +174,13 @@ export default function ReportForm() {
       footer={
         <>
           {create.error ? (
-            <AppText variant="small" align="center" color={colors.danger}>
+            <FooterNote color={colors.danger}>
               {create.error instanceof ApiError ? create.error.message : 'Could not create your report. Please try again.'}
-            </AppText>
+            </FooterNote>
           ) : (
-            <AppText variant="small" align="center">
+            <FooterNote>
               Your details stay private and secure.
-            </AppText>
+            </FooterNote>
           )}
           <PrimaryButton label={config.cta} onPress={submit} loading={create.isPending} />
         </>

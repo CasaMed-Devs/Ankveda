@@ -2,16 +2,24 @@ import type { Request } from 'express';
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { plansRepo, subscriptionsRepo } from '../db/repositories/billing';
+import { plansRepo, subscriptionsRepo, termsOf } from '../db/repositories/billing';
 import { webhookEventsRepo } from '../db/repositories/ops';
 import { uidOf } from '../lib/auth';
 import { handle, HttpError, parseBody } from '../lib/http';
 import { logger } from '../lib/logger';
-import { markCancelAtPeriodEnd, recordPayment, syncSubscription, type RazorpaySubscriptionEntity } from '../services/billing';
+import {
+  markCancelAtPeriodEnd,
+  recordTransaction,
+  resolveSubscriptionId,
+  syncSubscription,
+  type RazorpaySubscriptionEntity,
+} from '../services/billing';
+import type { RazorpayPaymentLike } from '../services/billingRules';
 import { isPremiumUser, publicUser } from '../services/entitlement';
 import {
   cancelRazorpaySubscription,
   createRazorpaySubscription,
+  fetchRazorpayPayment,
   fetchRazorpaySubscription,
   publicKeyId,
   verifyCheckoutSignature,
@@ -33,13 +41,19 @@ subscriptionsRouter.post(
     if (!plan || !plan.active) throw new HttpError(404, 'This plan is no longer available. Please refresh.', 'plan_unavailable');
 
     const subscription = await createRazorpaySubscription({ plan, planId, uid, phone: user.phone });
-    await subscriptionsRepo.createPending(subscription.id, uid, planId);
+    await subscriptionsRepo.createPending({
+      subscriptionId: subscription.id,
+      userId: uid,
+      planId,
+      totalCount: subscription.total_count,
+      startAt: subscription.start_at ? subscription.start_at * 1000 : null,
+    });
 
     res.json({
       keyId: publicKeyId(),
       subscriptionId: subscription.id,
       planName: plan.name,
-      description: plan.trialDays > 0 ? `${plan.trialDays} day trial · ${plan.name}` : plan.name,
+      description: termsOf(plan).trialDays > 0 ? `${termsOf(plan).trialDays} day trial · ${plan.name}` : plan.name,
       phone: `+91${user.phone}`,
     });
   }),
@@ -59,7 +73,13 @@ subscriptionsRouter.post(
     const stored = await subscriptionsRepo.get(body.subscriptionId);
     if (!stored || stored.userId !== uid) throw new HttpError(403, 'This subscription belongs to another account.', 'forbidden');
 
-    await syncSubscription(await fetchRazorpaySubscription(body.subscriptionId), 'checkout.verified');
+    await syncSubscription(await fetchRazorpaySubscription(body.subscriptionId), { event: 'checkout.verified' });
+    // Record the checkout payment now (trial amount / first charge); webhooks later keep it up to date.
+    try {
+      await recordTransaction((await fetchRazorpayPayment(body.paymentId)) as RazorpayPaymentLike, body.subscriptionId);
+    } catch (error) {
+      logger.warn('Checkout payment not recorded yet (webhook will retry)', { paymentId: body.paymentId, error });
+    }
     res.json({ user: publicUser(uid, await loadUser(uid)) });
   }),
 );
@@ -70,8 +90,9 @@ subscriptionsRouter.post(
   handle(async (req, res) => {
     const uid = uidOf(req);
     for (const sub of await subscriptionsRepo.listByUser(uid, 5)) {
+      if (sub.source === 'admin_grant') continue; // complimentary access has no Razorpay subscription
       try {
-        await syncSubscription(await fetchRazorpaySubscription(sub.id), 'restore');
+        await syncSubscription(await fetchRazorpaySubscription(sub.id), { event: 'restore' });
       } catch (error) {
         logger.warn('Restore: could not refresh subscription', { id: sub.id, error });
       }
@@ -89,8 +110,15 @@ subscriptionsRouter.post(
     const user = await loadUser(uid);
     const subscriptionId = user.entitlement?.subscriptionId;
     if (!subscriptionId || !isPremiumUser(user)) throw new HttpError(400, 'There is no active subscription to cancel.', 'no_subscription');
-    await cancelRazorpaySubscription(subscriptionId);
+    const stored = await subscriptionsRepo.get(subscriptionId);
+    if (stored?.source === 'admin_grant') {
+      throw new HttpError(400, 'This is complimentary access from Ankveda — there is no payment to cancel.', 'complimentary');
+    }
+    const inTrial = stored?.status === 'authenticated';
+    const cancelled = await cancelRazorpaySubscription(subscriptionId, !inTrial);
     await markCancelAtPeriodEnd(uid, subscriptionId);
+    // Trial cancels immediately in Razorpay; sync so the status history shows it (access stays until the trial ends).
+    if (inTrial) await syncSubscription(cancelled, { event: 'user.cancelled_trial' });
     res.json({ user: publicUser(uid, await loadUser(uid)) });
   }),
 );
@@ -99,7 +127,8 @@ type WebhookBody = {
   event?: string;
   payload?: {
     subscription?: { entity?: RazorpaySubscriptionEntity };
-    payment?: { entity?: Parameters<typeof recordPayment>[0] & { subscription_id?: string } };
+    payment?: { entity?: RazorpayPaymentLike & { subscription_id?: string | null } };
+    refund?: { entity?: { payment_id?: string } };
   };
 };
 
@@ -109,8 +138,13 @@ const rawBodyOf = (req: Request) => {
 };
 
 /**
- * Razorpay webhook (Dashboard → Webhooks → <api>/webhooks/razorpay).
- * Events: subscription.* (state) and subscription.charged / payment.* (payments ledger).
+ * Razorpay webhook → <api>/webhooks/razorpay. Subscribe to:
+ *   subscription.authenticated / activated / charged / pending / halted / cancelled / completed / paused / resumed
+ *   payment.authorized / captured / failed, refund.created / processed
+ * Every delivery is recorded once (webhookEvents), then:
+ *   subscription.* → subscriptions/{id} (+ events history, user entitlement)
+ *   payments       → transactions/{paymentId}
+ *   refunds        → the refunded transaction is re-read from Razorpay
  */
 export const webhookRouter = Router();
 
@@ -123,17 +157,24 @@ webhookRouter.post(
     const body = req.body as WebhookBody;
     const event = body.event ?? 'unknown';
     const subscription = body.payload?.subscription?.entity;
-    const payment = body.payload?.payment?.entity;
+    let payment = body.payload?.payment?.entity;
+    const refund = body.payload?.refund?.entity;
 
-    const eventId = req.header('x-razorpay-event-id');
-    if (eventId && !(await webhookEventsRepo.recordOnce(eventId, event, subscription?.id ?? payment?.id ?? null))) {
+    const eventId = req.header('x-razorpay-event-id') ?? null;
+    if (eventId && !(await webhookEventsRepo.recordOnce(eventId, event, subscription?.id ?? payment?.id ?? refund?.payment_id ?? null))) {
       res.json({ ok: true, duplicate: true });
       return;
     }
 
-    if (subscription?.id) await syncSubscription(subscription, event);
-    const subscriptionId = subscription?.id ?? payment?.subscription_id;
-    if (payment?.id && subscriptionId) await recordPayment(payment, subscriptionId, event);
+    if (subscription?.id) await syncSubscription(subscription, { event, razorpayEventId: eventId });
+
+    // Refund events carry the refund; re-read the payment so the transaction shows the refunded amount.
+    if (!payment && refund?.payment_id) payment = (await fetchRazorpayPayment(refund.payment_id)) as RazorpayPaymentLike;
+    if (payment?.id) {
+      const subscriptionId = await resolveSubscriptionId(payment, subscription?.id);
+      if (subscriptionId) await recordTransaction(payment, subscriptionId);
+      else logger.info('Payment is not part of a subscription, ignored', { paymentId: payment.id, event });
+    }
 
     if (eventId) await webhookEventsRepo.markProcessed(eventId);
     res.json({ ok: true });

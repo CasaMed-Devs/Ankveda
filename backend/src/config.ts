@@ -47,9 +47,6 @@ export const config = {
     if (!value) throw new Error('JWT_SECRET is not configured');
     return value;
   },
-  get adminPassword() {
-    return env('ADMIN_PASSWORD');
-  },
   get openaiKey() {
     return env('OPENAI_API_KEY');
   },

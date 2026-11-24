@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
 
 import { useAuthStore } from '@/lib/auth-store';
+import { API_URL } from '@/lib/config';
 import type {
   ChatMessage,
   CheckoutSession,
@@ -12,8 +13,6 @@ import type {
   ReportType,
   User,
 } from '@/lib/types';
-
-const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/$/, '');
 
 export class ApiError extends Error {
   constructor(
@@ -28,7 +27,7 @@ export class ApiError extends Error {
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 const request = async <T>(method: Method, path: string, body?: unknown): Promise<T> => {
-  if (!API_URL) throw new ApiError('EXPO_PUBLIC_API_URL is not set. See app/.env.example.', 0, 'config');
+  if (!API_URL) throw new ApiError('Backend URL is not set. Check EXPO_PUBLIC_API_TARGET in app/.env.local.', 0, 'config');
 
   const token = useAuthStore.getState().token;
   let response: Response;

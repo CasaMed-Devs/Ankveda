@@ -6,15 +6,15 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "env": { "EXPO_PUBLIC_API_URL": "https://ankveda-backend.vercel.app/api" }
+      "env": { "EXPO_PUBLIC_API_TARGET": "vercel" }
     },
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_API_URL": "https://ankveda-backend.vercel.app/api" }
+      "env": { "EXPO_PUBLIC_API_TARGET": "vercel" }
     },
     "production": {
-      "env": { "EXPO_PUBLIC_API_URL": "https://ankveda-e6471.web.app/api" }
+      "env": { "EXPO_PUBLIC_API_TARGET": "firebase" }
     }
   }
 }

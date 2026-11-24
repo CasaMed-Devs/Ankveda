@@ -3,14 +3,18 @@ import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
 import { config } from '../config';
 import type {
+  AdminOverviewDoc,
   AuditLogDoc,
+  DailyStatsMonthDoc,
+  UserDeletionDoc,
   ChatMessageDoc,
   DailyDoc,
   OtpChallengeDoc,
-  PaymentDoc,
   PlanDoc,
   ReportDoc,
   SubscriptionDoc,
+  SubscriptionEventDoc,
+  TransactionDoc,
   UserDoc,
   WebhookEventDoc,
 } from '../types';
@@ -35,8 +39,11 @@ const initApp = (): App => {
   });
 };
 
+/** The Firebase Admin app (Firestore + Auth for verifying admin ID tokens). */
+export const firebaseApp = initApp();
+
 const createDb = (): Firestore => {
-  const app = initApp();
+  const app = firebaseApp;
   const databaseId = config.firestoreDatabaseId;
   const firestore = databaseId === '(default)' ? getFirestore(app) : getFirestore(app, databaseId);
   firestore.settings({ ignoreUndefinedProperties: true });
@@ -55,8 +62,13 @@ export const refs = {
   dailyGuidance: (userId: string) => refs.user(userId).collection('dailyGuidance').withConverter(converter<DailyDoc>()),
   plans: () => db.collection('plans').withConverter(converter<PlanDoc>()),
   subscriptions: () => db.collection('subscriptions').withConverter(converter<SubscriptionDoc>()),
-  payments: () => db.collection('payments').withConverter(converter<PaymentDoc>()),
+  subscriptionEvents: (subscriptionId: string) =>
+    refs.subscriptions().doc(subscriptionId).collection('events').withConverter(converter<SubscriptionEventDoc>()),
+  transactions: () => db.collection('transactions').withConverter(converter<TransactionDoc>()),
   otpChallenges: () => db.collection('otpChallenges').withConverter(converter<OtpChallengeDoc>()),
   webhookEvents: () => db.collection('webhookEvents').withConverter(converter<WebhookEventDoc>()),
   adminAuditLog: () => db.collection('adminAuditLog').withConverter(converter<AuditLogDoc>()),
+  adminStats: () => db.collection('adminStats').withConverter(converter<AdminOverviewDoc>()),
+  adminDailyStats: () => db.collection('adminDailyStats').withConverter(converter<DailyStatsMonthDoc>()),
+  userDeletions: () => db.collection('userDeletions').withConverter(converter<UserDeletionDoc>()),
 };

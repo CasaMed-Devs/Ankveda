@@ -26,11 +26,13 @@ export const NumberDial = ({ value = 7 }: { value?: number }) => (
     <Image source={require('../../assets/images/orbit-middle.svg')} style={styles.middle} />
     <Image source={require('../../assets/images/orbit-inner.svg')} style={styles.inner} />
     {DIGITS.map((d) => (
-      <AppText key={d.n} style={[styles.digit, { left: d.x - 15, top: d.y }]}>
+      <AppText key={d.n} style={[styles.digit, { left: d.x - 15, top: d.y }]} allowFontScaling={false}>
         {d.n}
       </AppText>
     ))}
-    <AppText style={styles.centre}>{value}</AppText>
+    <AppText style={styles.centre} allowFontScaling={false}>
+      {value}
+    </AppText>
   </View>
 );
 

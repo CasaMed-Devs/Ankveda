@@ -6,7 +6,7 @@ import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { OtpInput } from '@/components/Fields';
 import { Heading } from '@/components/Heading';
-import { Screen } from '@/components/Screen';
+import { FooterNote, Screen } from '@/components/Screen';
 import { api, ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { RESEND_SECONDS } from '@/lib/config';
@@ -63,9 +63,9 @@ export default function Verify() {
     <Screen
       footer={
         <>
-          <AppText variant="small" align="center">
+          <FooterNote>
             Your details stay private and secure.
-          </AppText>
+          </FooterNote>
           <PrimaryButton label="Verify & continue" onPress={() => verify()} loading={loading} disabled={code.length !== 6} />
         </>
       }
@@ -117,5 +117,5 @@ export default function Verify() {
 const styles = StyleSheet.create({
   headingWrap: { gap: 10 },
   change: { fontFamily: fonts.sansSemiBold, color: '#dedede' },
-  otp: { marginTop: 40, gap: 20 },
+  otp: { marginTop: 60, gap: 27 },
 });

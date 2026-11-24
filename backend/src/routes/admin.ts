@@ -1,123 +1,370 @@
+/**
+ * Admin dashboard API. Every route requires a Firebase Auth ID token with the `admin` custom claim
+ * (lib/auth.ts → requireAdmin). The dashboard never reads Firestore directly — rules deny all clients.
+ */
+import { FieldPath } from 'firebase-admin/firestore';
 import { Router } from 'express';
 import { z } from 'zod';
 
 import { config } from '../config';
-import { paymentsRepo, plansRepo, subscriptionsRepo } from '../db/repositories/billing';
-import { usersRepo } from '../db/repositories/users';
-import { requireAdmin, safeEqual, signAdminToken } from '../lib/auth';
+import { db, refs } from '../db/firestore';
+import { plansRepo, subscriptionsRepo, transactionsRepo } from '../db/repositories/billing';
+import { searchName } from '../db/repositories/users';
+import { DAY_MS } from '../db/schema';
+import { actorOf, requireAdmin } from '../lib/auth';
 import { handle, HttpError, parseBody } from '../lib/http';
-import { computeEntitlement } from '../services/entitlement';
-import { createRazorpayPlan, razorpayConfigured } from '../services/razorpay';
+import { getActivity } from '../services/admin/activity';
+import { audit } from '../services/admin/audit';
+import { deleteUser } from '../services/admin/deletion';
+import {
+  listAudit,
+  listSubscriptions,
+  listTransactions,
+  listUsers,
+  subscriptionRow,
+  SUBSCRIPTION_FILTERS,
+  TRANSACTION_FILTERS,
+  transactionRow,
+  USER_STATUS_FILTERS,
+  userNames,
+} from '../services/admin/lists';
+import { pageSizeOf } from '../services/admin/paging';
+import { getPricing, updatePricing } from '../services/admin/pricing';
+import { getOverview, getSeries, rebuildSeries } from '../services/admin/stats';
+import { adminExpire, grantSubscription } from '../services/admin/subscriptionActions';
+import { istDateStart, isDateKey } from '../services/admin/time';
+import { getUserDetail } from '../services/admin/userDetail';
+import { razorpayConfigured } from '../services/razorpay';
+import type { AuditAction } from '../types';
 
 export const adminRouter = Router();
 
-adminRouter.post(
-  '/admin/login',
-  handle(async (req, res) => {
-    const { password } = parseBody(z.object({ password: z.string().min(1) }), req.body);
-    const expected = config.adminPassword;
-    if (!expected) throw new HttpError(503, 'ADMIN_PASSWORD is not configured on the server.', 'admin_unconfigured');
-    if (!safeEqual(password, expected)) throw new HttpError(401, 'Wrong password.', 'unauthorized');
-    res.json({ token: signAdminToken(), environment: config.appEnv });
-  }),
-);
-
 adminRouter.use('/admin', requireAdmin);
 
-adminRouter.get(
-  '/admin/plans',
-  handle(async (_req, res) => {
-    res.json({ plans: await plansRepo.list(), razorpayConfigured: razorpayConfigured(), environment: config.appEnv });
-  }),
-);
+const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+const oneOf = <T extends string>(values: readonly T[], v: unknown): T | undefined =>
+  typeof v === 'string' && (values as readonly string[]).includes(v) ? (v as T) : undefined;
+/** IST calendar day "YYYY-MM-DD" → start (from) / exclusive end (to) instants. */
+const dayStart = (v: unknown) => (isDateKey(v) ? istDateStart(v) : undefined);
+const dayEnd = (v: unknown) => (isDateKey(v) ? istDateStart(v) + DAY_MS : undefined);
 
-const planSchema = z
-  .object({
-    name: z.string().trim().min(2).max(60),
-    description: z.string().trim().max(200).optional(),
-    priceInPaise: z.number().int().min(100, 'Price must be at least ₹1.'),
-    period: z.enum(['daily', 'weekly', 'monthly', 'yearly']),
-    interval: z.number().int().min(1).max(12),
-    trialDays: z.number().int().min(0).max(90),
-    trialPriceInPaise: z.number().int().min(0),
-    featured: z.boolean(),
-    active: z.boolean(),
-  })
-  .refine((p) => p.period !== 'daily' || p.interval >= 7, { message: 'Razorpay daily plans need an interval of at least 7.' })
-  .refine((p) => p.trialDays > 0 || p.trialPriceInPaise === 0, { message: 'Set trial days to use a trial price.' });
+// ── Session & system ─────────────────────────────────────────────────────────
 
-/**
- * Creates a plan in Razorpay, then Firestore. Razorpay plans are immutable, so a price or
- * duration change = create a new plan, feature it, and deactivate (archive) the old one.
- */
+/** Called by the dashboard right after sign-in: records the login once per Firebase sign-in. */
 adminRouter.post(
-  '/admin/plans',
+  '/admin/session',
   handle(async (req, res) => {
-    const input = parseBody(planSchema, req.body);
-    const description = input.description || null;
-    const razorpayPlanId = await createRazorpayPlan({ ...input, description });
-    const plan = await plansRepo.create({ ...input, description, razorpayPlanId });
-    res.status(201).json({ plan });
+    const admin = req.admin!;
+    const loginId = `login_${admin.uid}_${admin.authTime}`;
+    await refs
+      .adminAuditLog()
+      .doc(loginId)
+      .create({ action: 'admin.login', actor: { uid: admin.uid, email: admin.email }, details: { ip: req.ip ?? null }, createdAt: Date.now() })
+      .catch((e: { code?: number }) => {
+        if (e.code !== 6) throw e; // ALREADY_EXISTS → this sign-in was already recorded
+      });
+    res.json({ admin: { uid: admin.uid, email: admin.email }, environment: config.appEnv });
   }),
 );
 
-/** Only display/visibility fields are editable. */
-adminRouter.patch(
-  '/admin/plans/:id',
-  handle(async (req, res) => {
-    const patch = parseBody(
-      z.object({ name: z.string().trim().min(2).max(60).optional(), featured: z.boolean().optional(), active: z.boolean().optional() }),
-      req.body,
-    );
-    const plan = await plansRepo.update(String(req.params.id), patch);
-    if (!plan) throw new HttpError(404, 'Plan not found', 'not_found');
-    res.json({ plan });
+adminRouter.get(
+  '/admin/system',
+  handle(async (_req, res) => {
+    res.json({
+      environment: config.appEnv,
+      firestoreDatabaseId: config.firestoreDatabaseId,
+      razorpayConfigured: razorpayConfigured(),
+      razorpayWebhookConfigured: !!config.razorpayWebhookSecret,
+      razorpayKeyMode: config.razorpay?.keyId.startsWith('rzp_live') ? 'live' : config.razorpay ? 'test' : null,
+      reportRunner: config.reportRunner,
+    });
   }),
 );
+
+// ── Statistics ───────────────────────────────────────────────────────────────
+
+adminRouter.get(
+  '/admin/stats/overview',
+  handle(async (req, res) => {
+    res.json(await getOverview(req.query.refresh === '1'));
+  }),
+);
+
+const rangeSchema = z
+  .object({ from: z.string().refine(isDateKey, 'Invalid start date'), to: z.string().refine(isDateKey, 'Invalid end date') })
+  .refine((r) => r.from <= r.to, { message: 'The start date must be before the end date.' })
+  .refine((r) => (istDateStart(r.to) - istDateStart(r.from)) / DAY_MS < 366, { message: 'Choose a range of at most 366 days.' });
+
+adminRouter.get(
+  '/admin/stats/series',
+  handle(async (req, res) => {
+    const { from, to } = parseBody(rangeSchema, req.query);
+    res.json({ days: await getSeries(from, to) });
+  }),
+);
+
+adminRouter.post(
+  '/admin/stats/rebuild',
+  handle(async (req, res) => {
+    const { from, to } = parseBody(rangeSchema, req.body);
+    res.json({ days: await rebuildSeries(from, to, actorOf(req)) });
+  }),
+);
+
+adminRouter.get(
+  '/admin/activity',
+  handle(async (_req, res) => {
+    res.json(await getActivity());
+  }),
+);
+
+// ── Users ────────────────────────────────────────────────────────────────────
 
 adminRouter.get(
   '/admin/users',
-  handle(async (_req, res) => {
-    const users = await usersRepo.list(200);
-    res.json({
-      users: users.map((u) => {
-        const ent = computeEntitlement(u.entitlement);
-        return {
-          id: u.id,
-          phone: u.phone,
-          fullName: u.profile?.fullName,
-          dob: u.profile?.dob,
-          premium: ent.active,
-          status: ent.status,
-          createdAt: u.createdAt,
-        };
+  handle(async (req, res) => {
+    const q = req.query;
+    res.json(
+      await listUsers({
+        pageSize: pageSizeOf(q.pageSize),
+        cursor: str(q.cursor),
+        status: oneOf(USER_STATUS_FILTERS, q.status),
+        planId: str(q.planId),
+        from: dayStart(q.from),
+        to: dayEnd(q.to),
+        q: str(q.q),
       }),
-    });
+    );
   }),
 );
+
+adminRouter.get(
+  '/admin/users/:id',
+  handle(async (req, res) => {
+    res.json(await getUserDetail(String(req.params.id)));
+  }),
+);
+
+const grantSchema = z
+  .object({
+    planId: z.string().min(1, 'Choose a plan.'),
+    startDate: z.string().refine(isDateKey, 'Invalid start date').optional(),
+    durationDays: z.number().int().min(1).max(3650).optional(),
+    expiryDate: z.string().refine(isDateKey, 'Invalid expiry date').optional(),
+    notes: z.string().trim().max(500).optional(),
+  })
+  .refine((g) => g.durationDays || g.expiryDate, { message: 'Choose a duration or an expiry date.' });
+
+adminRouter.post(
+  '/admin/users/:id/grant',
+  handle(async (req, res) => {
+    const input = parseBody(grantSchema, req.body);
+    const today = istDateStart(new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10));
+    if (input.startDate && istDateStart(input.startDate) > today) {
+      throw new HttpError(400, 'The start date cannot be in the future — a grant gives access immediately.', 'validation');
+    }
+    // A start date of "today" means now; earlier dates are backdated to the start of that IST day.
+    const startAt = input.startDate && istDateStart(input.startDate) < today ? istDateStart(input.startDate) : Date.now();
+    const subscription = await grantSubscription(
+      String(req.params.id),
+      {
+        planId: input.planId,
+        startAt,
+        durationDays: input.durationDays,
+        // Expiry date is inclusive: access lasts until the end of that IST day.
+        endAt: input.expiryDate ? istDateStart(input.expiryDate) + DAY_MS : undefined,
+        notes: input.notes ?? null,
+      },
+      actorOf(req),
+    );
+    res.status(201).json({ subscription: subscriptionRow(subscription.id, subscription) });
+  }),
+);
+
+/** Permanent deletion. The body must repeat the user id (typed confirmation in the dashboard). */
+adminRouter.delete(
+  '/admin/users/:id',
+  handle(async (req, res) => {
+    const id = String(req.params.id);
+    const { confirm } = parseBody(z.object({ confirm: z.string() }), req.body);
+    if (confirm !== id) throw new HttpError(400, 'Confirmation does not match the user id.', 'validation');
+    const job = await deleteUser(id, actorOf(req));
+    res.json({ deletion: { status: job.status, deleted: job.deleted, completedAt: job.completedAt } });
+  }),
+);
+
+// ── Subscriptions ────────────────────────────────────────────────────────────
 
 adminRouter.get(
   '/admin/subscriptions',
-  handle(async (_req, res) => {
-    const subscriptions = await subscriptionsRepo.list(200);
+  handle(async (req, res) => {
+    const q = req.query;
+    res.json(
+      await listSubscriptions({
+        pageSize: pageSizeOf(q.pageSize),
+        cursor: str(q.cursor),
+        filter: oneOf(SUBSCRIPTION_FILTERS, q.filter),
+        userId: str(q.userId),
+      }),
+    );
+  }),
+);
+
+/** One subscription with its full status history and every transaction (joined by the subscription id). */
+adminRouter.get(
+  '/admin/subscriptions/:id',
+  handle(async (req, res) => {
+    const id = String(req.params.id);
+    const subscription = await subscriptionsRepo.get(id);
+    if (!subscription) throw new HttpError(404, 'Subscription not found', 'not_found');
+    const [events, transactions, names] = await Promise.all([
+      subscriptionsRepo.events(id),
+      transactionsRepo.listBySubscription(id, 100),
+      userNames([subscription.userId]),
+    ]);
+    const user = names.get(subscription.userId);
     res.json({
-      subscriptions: subscriptions.map((s) => ({
-        id: s.id,
-        userId: s.userId,
-        planId: s.planId,
-        planName: s.planSnapshot.name,
-        status: s.status,
-        currentPeriodEnd: s.currentPeriodEnd,
-        cancelAtPeriodEnd: s.cancelAtPeriodEnd,
-        createdAt: s.createdAt,
-      })),
+      subscription: subscriptionRow(id, subscription, user),
+      events,
+      transactions: transactions.map((t) => transactionRow(t.id, t, user, subscription.planSnapshot.name)),
+    });
+  }),
+);
+
+adminRouter.post(
+  '/admin/subscriptions/:id/expire',
+  handle(async (req, res) => {
+    const { mode, notes } = parseBody(
+      z.object({ mode: z.enum(['cancel_renewal', 'expire_now']), notes: z.string().trim().max(500).optional() }),
+      req.body,
+    );
+    const id = String(req.params.id);
+    const sub = await adminExpire(id, mode, notes ?? null, actorOf(req));
+    res.json({ subscription: sub ? subscriptionRow(id, sub) : null });
+  }),
+);
+
+// ── Payments ─────────────────────────────────────────────────────────────────
+
+adminRouter.get(
+  '/admin/transactions',
+  handle(async (req, res) => {
+    const q = req.query;
+    res.json(
+      await listTransactions({
+        pageSize: pageSizeOf(q.pageSize),
+        cursor: str(q.cursor),
+        filter: oneOf(TRANSACTION_FILTERS, q.filter),
+        from: dayStart(q.from),
+        to: dayEnd(q.to),
+        userId: str(q.userId),
+        subscriptionId: str(q.subscriptionId),
+      }),
+    );
+  }),
+);
+
+// ── Plans & pricing ──────────────────────────────────────────────────────────
+
+adminRouter.get(
+  '/admin/plans',
+  handle(async (_req, res) => {
+    const plans = await plansRepo.list();
+    res.json({
+      plans: plans.map((p) => ({ id: p.id, name: p.name, priceInPaise: p.priceInPaise, period: p.period, interval: p.interval, active: p.active, featured: p.featured })),
+      razorpayConfigured: razorpayConfigured(),
     });
   }),
 );
 
 adminRouter.get(
-  '/admin/payments',
+  '/admin/pricing',
   handle(async (_req, res) => {
-    res.json({ payments: await paymentsRepo.list(200) });
+    res.json(await getPricing());
+  }),
+);
+
+const pricingSchema = z.object({
+  expectedUpdatedAt: z.number().nullable(),
+  name: z.string().trim().min(2, 'Plan name is too short.').max(60),
+  description: z.string().trim().max(200).nullable(),
+  trialEnabled: z.boolean(),
+  trialDays: z.number().int().min(0).max(90),
+  trialPriceInPaise: z.number().int().min(0).max(10_000_000),
+  monthlyPlanEnabled: z.boolean(),
+  price: z.discriminatedUnion('mode', [
+    z.object({ mode: z.literal('unchanged') }),
+    z.object({ mode: z.literal('create'), priceInPaise: z.number().int().min(100).max(10_000_000) }),
+    z.object({ mode: z.literal('existing'), priceInPaise: z.number().int().min(100).max(10_000_000), razorpayPlanId: z.string().min(5) }),
+  ]),
+});
+
+adminRouter.put(
+  '/admin/pricing',
+  handle(async (req, res) => {
+    const input = parseBody(pricingSchema, req.body);
+    const planId = await updatePricing({ ...input, description: input.description || null }, actorOf(req));
+    res.json({ planId, ...(await getPricing()) });
+  }),
+);
+
+// ── Audit log ────────────────────────────────────────────────────────────────
+
+const AUDIT_ACTIONS: AuditAction[] = [
+  'admin.login',
+  'plan.create',
+  'plan.update',
+  'pricing.update',
+  'subscription.grant',
+  'subscription.expire',
+  'subscription.cancel_renewal',
+  'user.delete',
+  'maintenance.run',
+];
+
+adminRouter.get(
+  '/admin/audit',
+  handle(async (req, res) => {
+    const q = req.query;
+    res.json(
+      await listAudit({
+        pageSize: pageSizeOf(q.pageSize),
+        cursor: str(q.cursor),
+        action: oneOf(AUDIT_ACTIONS, q.action),
+        targetUserId: str(q.targetUserId),
+      }),
+    );
+  }),
+);
+
+// ── Maintenance ──────────────────────────────────────────────────────────────
+
+/** Fills users.nameLower (name search) for accounts created before search existed. Pages of 300. */
+adminRouter.post(
+  '/admin/maintenance/backfill-search',
+  handle(async (req, res) => {
+    let scanned = 0;
+    let updated = 0;
+    let last: string | null = null;
+    for (;;) {
+      let q = refs.users().orderBy(FieldPath.documentId()).limit(300);
+      if (last) q = q.startAfter(last);
+      const snap = await q.get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      for (const d of snap.docs) {
+        const u = d.data();
+        const wanted = u.profile?.fullName ? searchName(u.profile.fullName) : null;
+        if ((u.nameLower ?? null) !== wanted) {
+          batch.set(d.ref, { nameLower: wanted }, { merge: true });
+          updated++;
+        }
+      }
+      await batch.commit();
+      scanned += snap.size;
+      last = snap.docs[snap.docs.length - 1]!.id;
+    }
+    await audit.write({ action: 'maintenance.run', actor: actorOf(req), details: { task: 'search.backfill', scanned, updated } });
+    res.json({ scanned, updated });
   }),
 );

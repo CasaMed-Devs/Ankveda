@@ -94,5 +94,5 @@ const styles = StyleSheet.create({
   featuredTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   featuredTitle: { fontSize: 28, lineHeight: 30, flexShrink: 1 },
   empty: { padding: 18, gap: 10 },
-  cta: { marginTop: 32 },
+  cta: { marginTop: 'auto', paddingTop: 32 },
 });

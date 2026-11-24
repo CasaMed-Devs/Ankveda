@@ -1,4 +1,4 @@
-import { StyleSheet, Text, type TextProps, type TextStyle } from 'react-native';
+import { StyleSheet, Text, useWindowDimensions, type TextProps, type TextStyle } from 'react-native';
 
 import { colors, fonts } from '@/theme/tokens';
 
@@ -46,9 +46,26 @@ const variants = StyleSheet.create({
   arrow: { fontFamily: fonts.sansRegular, color: colors.gold, ...sansLine(19) },
 });
 
-export const AppText = ({ variant = 'body', color, align, style, ...rest }: AppTextProps) => (
-  <Text
-    {...rest}
-    style={[variants[variant], color ? { color } : null, align ? { textAlign: align } : null, style]}
-  />
-);
+/**
+ * Text scaling policy (keeps the Figma layout intact on every phone):
+ *  - never shrink below the design size (a phone set to "small text" would otherwise open up all gaps);
+ *  - allow growth for accessibility, but cap it so fixed-geometry layouts don't clip or overlap.
+ * Decorative display numbers pass allowFontScaling={false} explicitly.
+ */
+export const MAX_FONT_SCALE = 1.2;
+
+export const useTextScaleProps = () => {
+  const { fontScale } = useWindowDimensions();
+  return { allowFontScaling: fontScale > 1, maxFontSizeMultiplier: MAX_FONT_SCALE };
+};
+
+export const AppText = ({ variant = 'body', color, align, style, ...rest }: AppTextProps) => {
+  const scale = useTextScaleProps();
+  return (
+    <Text
+      {...scale}
+      {...rest}
+      style={[variants[variant], color ? { color } : null, align ? { textAlign: align } : null, style]}
+    />
+  );
+};

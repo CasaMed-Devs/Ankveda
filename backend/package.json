@@ -10,8 +10,9 @@
     "build:watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "test": "node --test lib/src/**/*.test.js",
-    "serve": "npm run build && firebase emulators:start --only functions,firestore,hosting",
-    "deploy:firebase": "firebase deploy --only functions"
+    "serve": "npm run build && firebase emulators:start --only auth,functions,firestore,hosting",
+    "deploy:firebase": "firebase deploy --only functions",
+    "admin:provision": "node scripts/provision-admin.mjs"
   },
   "dependencies": {
     "@vercel/functions": "^3.11.3",

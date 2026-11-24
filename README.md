@@ -1,6 +1,6 @@
 # Ankveda — Numerology app
 
-React Native (Expo SDK 58, TypeScript) app built from the Figma file *Ankveda – Numerology and kundali*, with a Node.js (Express) backend on Firestore, Razorpay subscriptions and a small admin page.
+React Native (Expo SDK 58, TypeScript) app built from the Figma file *Ankveda – Numerology and kundali*, with a Node.js (Express) backend on Firestore, Razorpay subscriptions and an admin dashboard.
 
 ```
 app/       Expo app (expo-router). Screens in app/src/app, shared UI in app/src/components
@@ -8,7 +8,7 @@ backend/   Express API (TypeScript), deployed two ways from the same code:
              api/index.ts      → Vercel (staging)
              src/firebase.ts   → Firebase Cloud Functions (production) + report trigger
            src/db/             → Firestore schema, converters, repositories (see docs/DATABASE.md)
-admin/     Admin web page (plans, users, subscriptions, payments) on Firebase Hosting
+admin/     Admin dashboard (React + Vite) on Firebase Hosting — see "Admin dashboard" below
 docs/      DATABASE.md — Firestore data model, relationships, indexes
 firebase.json · firestore.rules · firestore.indexes.json
 ```
@@ -24,9 +24,9 @@ Both use the Firestore `(default)` database in `ankveda-e6471` (asia-south2).
 
 | Area | Behaviour |
 |---|---|
-| Login | Phone number + 6-digit OTP sent by **VoiceNSMS** (DLT sender `HOTIPL`, template `80388`). Codes are random, hashed, single-use, valid 5 min; 25 s resend wait, 5 wrong attempts, max `OTP_DAILY_LIMIT` (default 8) SMS per number per day. `OTP_TEST_NUMBERS` gives fixed codes without SMS (Play review / QA). Without VoiceNSMS config it falls back to a fixed `DUMMY_OTP` shown in the app. |
+| Login | Phone number + 6-digit OTP sent by **VoiceNSMS** (DLT sender `HOTIPL`, template `81917` "Your <app>  App login OTP is <otp> , HouseofTech"). Codes are random, hashed, single-use, valid 5 min; 25 s resend wait, 5 wrong attempts, max `OTP_DAILY_LIMIT` (default 8) SMS per number per day. `OTP_TEST_NUMBERS` gives fixed codes without SMS (Play review / QA). Without VoiceNSMS config it falls back to a fixed `DUMMY_OTP` shown in the app. |
 | Free users | Can fill any report form and see the **locked preview**. Home birth number, Daily, Chat and full reports open the paywall. |
-| Premium | Razorpay **auto-renewing subscription**. The paywall shows the **one featured plan** from the backend — price, duration and trial are set in the admin page. |
+| Premium | Razorpay **auto-renewing subscription**. The paywall shows the **one featured plan** from the backend — price and trial are set in the admin dashboard (Paywall & Pricing). |
 | Reports | Name, Phone, Birth date, Compatibility, Career, Future, Car number. Numbers are calculated with Chaldean rules (matches the Figma example: Aarav Sharma → 27 → 9), enriched with **astrologyapi.com** numerology data, and written by **OpenAI**. Generated once and kept. |
 | Daily | Personal lucky number/time + a short message (Astrology API + OpenAI), cached per user per day. |
 | Chat | AI astrologer via the astrologyapi.com **Astro Chat API**; the conversation session is kept per user. No message limit. History saved. |
@@ -47,22 +47,22 @@ Every external service has a local fallback, so the whole app runs on the emulat
 # Backend
 cd backend
 npm install
-cp .secret.local.example .secret.local   # fill in values (JWT_SECRET + ADMIN_PASSWORD are required)
+cp .secret.local.example .secret.local   # fill in values (JWT_SECRET is required)
 cp .env.example .env.local
 npm run build
 cd ..
-npx firebase-tools emulators:start --only functions,firestore,hosting
+npx firebase-tools emulators:start --only auth,functions,firestore,hosting
 ```
 
 - API: `http://127.0.0.1:5001/<project-id>/asia-south2/api/health`
-- Admin page: `http://127.0.0.1:5000` (password = `ADMIN_PASSWORD`)
+- Admin dashboard: see *Admin dashboard → Local development* below
 - Emulator UI (browse Firestore): `http://127.0.0.1:4000`
 
 ```bash
 # App (Android). Razorpay needs a development build — it does not run in Expo Go.
 cd app
 npm install
-cp .env.example .env.local     # EXPO_PUBLIC_API_URL=https://ankveda-backend.vercel.app/api (or the emulator URL)
+cp .env.example .env.local     # EXPO_PUBLIC_API_TARGET=vercel | firebase | local
 npx expo run:android           # builds and installs the dev build on an emulator/device
 ```
 
@@ -80,18 +80,17 @@ Environment variables (Vercel → Project → Settings → Environment Variables
 |---|---|
 | `FIREBASE_SERVICE_ACCOUNT` | service-account key, base64. Generate it in `backend/` with: `node -e "process.stdout.write(Buffer.from(require('fs').readFileSync('service-account.json')).toString('base64'))"` |
 | `JWT_SECRET` | a long random string. Generate with `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
-| `ADMIN_PASSWORD` | password for the admin page |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | OpenAI key / `gpt-4o-mini` |
 | `ASTROLOGY_API_KEY` | astrologyapi.com access token (`ak-…`) |
 | `NODEJS_HELPERS` | `0` (required: keeps the raw body for Razorpay webhook signatures) |
 | `APP_ENV` / `REPORT_RUNNER` | `staging` / `inline` |
 | `VOICENSMS_API_KEY` | VoiceNSMS API key |
-| `VOICENSMS_SENDER_ID` / `VOICENSMS_TEMPLATE_ID` | `HOTIPL` / `80388` |
-| `VOICENSMS_SEND_URL` | send URL from the VoiceNSMS dashboard with placeholders `{apiKey}` `{senderId}` `{templateId}` `{mobile}`/`{mobile91}` `{message}` |
-| `VOICENSMS_MESSAGE` | exact DLT template text with `{otp}` |
+| `VOICENSMS_SENDER_ID` / `VOICENSMS_TEMPLATE_ID` | `HOTIPL` / `81917` |
+| `VOICENSMS_SEND_URL` | `https://api.voicensms.in/SMSAPI/webresources/CreateSMSCampaignGet?ukey={apiKey}&msisdn={mobile}&credittype=7&senderid={senderId}&templateid={templateId}&message={message}&filetype=2` (placeholders `{apiKey}` `{senderId}` `{templateId}` `{mobile}`/`{mobile91}` `{message}`) |
+| `VOICENSMS_MESSAGE` | `Your Ankveda  App login OTP is {otp} , HouseofTech` (exact DLT text: two spaces before "App", space before the comma) |
 | `OTP_TEST_NUMBERS` | optional, e.g. `9000000001:482913` |
 | `CORS_ORIGINS` | `https://ankveda-e6471.web.app,https://ankveda-e6471.firebaseapp.com` |
-| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` | Razorpay **test** keys. Webhook URL: `https://ankveda-backend.vercel.app/api/webhooks/razorpay` |
+| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` | Razorpay keys (live keys charge real money — prefer **test** keys on staging). Webhook URL: `https://ankveda-backend.vercel.app/api/webhooks/razorpay` |
 
 Check it with `curl https://ankveda-backend.vercel.app/health`.
 
@@ -103,24 +102,70 @@ Firestore indexes, TTL policies and rules: `npx firebase-tools deploy --only fir
 npx firebase-tools login
 # Secrets (each command prompts for the value)
 npx firebase-tools functions:secrets:set JWT_SECRET
-npx firebase-tools functions:secrets:set ADMIN_PASSWORD
 npx firebase-tools functions:secrets:set OPENAI_API_KEY
 npx firebase-tools functions:secrets:set ASTROLOGY_API_KEY
 npx firebase-tools functions:secrets:set RAZORPAY_KEY_ID
 npx firebase-tools functions:secrets:set RAZORPAY_KEY_SECRET
 npx firebase-tools functions:secrets:set RAZORPAY_WEBHOOK_SECRET
 cp backend/.env.example backend/.env      # non-secret settings
-npx firebase-tools deploy                 # functions, Firestore rules/indexes, admin hosting
+npx firebase-tools deploy                 # functions, Firestore rules/indexes, admin dashboard (built on predeploy)
 ```
 
 Then:
-- **Razorpay webhook**: Dashboard → Webhooks → add `https://<project-id>.web.app/api/webhooks/razorpay`, secret = `RAZORPAY_WEBHOOK_SECRET`, events: all `subscription.*`.
-- **Create a plan**: open `https://<project-id>.web.app`, sign in, create e.g. *Premium Monthly · ₹499 / month · 5 trial days · ₹49 trial*, tick **Featured**.
-- **App**: set `EXPO_PUBLIC_API_URL=https://<project-id>.web.app/api` and build with EAS (`npx eas-cli@latest build -p android`).
+- **Razorpay webhook**: Dashboard → Account & Settings → Webhooks → add `<api>/webhooks/razorpay` with secret = `RAZORPAY_WEBHOOK_SECRET`. Events: `subscription.authenticated`, `subscription.activated`, `subscription.charged`, `subscription.pending`, `subscription.halted`, `subscription.cancelled`, `subscription.completed`, `subscription.paused`, `subscription.resumed`, `payment.authorized`, `payment.captured`, `payment.failed`, `refund.created`, `refund.processed`. Billing data model: see `docs/DATABASE.md` → *Billing*.
+- **Pricing**: open `https://<project-id>.web.app`, sign in as an admin → *Paywall & Pricing*.
+- **App**: set `EXPO_PUBLIC_API_TARGET=firebase` (and `EXPO_PUBLIC_API_URL_FIREBASE=https://<project-id>.web.app/api` if it differs) and build with EAS (`npx eas-cli@latest build -p android`).
 
 ## Changing prices
 
-Razorpay plans cannot be edited. To change price or duration: create a new plan in the admin page → **Feature** it → **Deactivate** the old one. Existing subscribers keep their old plan; new users see the new one immediately.
+Admin dashboard → **Paywall & Pricing**:
+
+- **Trial** (on/off, days, amount) is edited in place. The trial is applied when a subscription is created, not stored in the Razorpay plan, so no Razorpay plan id is involved.
+- **Monthly amount**: Razorpay plan amounts cannot be edited. Saving a new amount either creates a new Razorpay plan through the API, or links a plan you created in Razorpay (its amount, period and currency are verified first). The new plan becomes the paywall plan and the old one is archived. Existing subscribers keep their price; new checkouts use the new one immediately.
+- **Disable the monthly plan** to hide it from the paywall (the app shows "Premium plans are being prepared").
+
+## Admin dashboard
+
+React + TypeScript + Vite + Tailwind + Recharts + TanStack Query in `admin/`, built to `admin/dist` and served by Firebase Hosting (`/api/**` → the `api` function, everything else → the SPA).
+
+| Area | What it does |
+|---|---|
+| Sign-in | Firebase Authentication (email + password). Access needs the custom claim `admin: true`, which only the provisioning script can set. **Every admin API request is verified on the server** (`verifyIdToken` with revocation check + claim). The browser never reads Firestore (rules deny all clients). |
+| Dashboard | Users, active / trial / expired subscribers, purchases, revenue, new users today / this month, with change vs the previous period. Charts by day / week / month for Today · 7 · 30 · 90 days · custom. Recent activity. |
+| Users | Cursor-paginated (20 / 50 / 100). Search by name prefix, phone (exact or prefix) or user id. Filters by status, plan and registration date. Drawer: profile, subscription (trial dates, Razorpay ids), payments, history, admin actions. |
+| Grant subscription | Complimentary access (`subscriptions/grant_…`, `source: admin_grant`). No Razorpay ids are invented and no payment is recorded, so a grant is never counted as revenue. Refused while a paid Razorpay subscription is active (cancel or expire it first). |
+| Expire subscription | *Cancel future billing* (Razorpay cancel at cycle end; access until the paid period ends) or *Expire access immediately* (Razorpay cancelled now, access ends now). If Razorpay cannot be reached, nothing is changed. A later webhook can never restore revoked access (`accessRevokedAt`). |
+| Delete user | Resumable job (`userDeletions/{id}`). Cancels live Razorpay billing first (stops if it can't), then deletes payments, subscriptions (+ history), the user with all subcollections (reports, chat, daily guidance) and the OTP record. App users have no Firebase Auth account or Storage files. The audit log keeps only counts. |
+| Subscriptions / Payments | Cursor-paginated with filters (active, trial, expired, cancelled, payment failed, manually granted / successful, failed, refunded, date range) and revenue summaries. |
+| Admin Activity | Audit log written by the server in the same transaction as each change (logins, grants, expiries, deletions, pricing, maintenance). |
+
+Statistics are Firestore `count()` / `sum()` aggregations, never incremented counters, so duplicate webhooks cannot skew them. They are cached in `adminStats/overview` (5 min) and `adminDailyStats/{YYYY-MM}` (per IST day). Settings → *Recompute statistics* rebuilds them.
+
+### Admin accounts
+
+```bash
+cd backend
+# Enables Email/Password sign-in, registers the Web app (writes admin/src/lib/firebase-config.json), creates the admin.
+ADMIN_PASSWORD_INITIAL='…' npm run admin:provision -- --email admin@ankveda.in
+ADMIN_PASSWORD_INITIAL='…' npm run admin:provision -- --email someone@ankveda.in --reset-password
+npm run admin:provision -- --email someone@ankveda.in --revoke     # remove admin access and sign out
+```
+
+Admins change their own password in **Settings → Change password**.
+
+### Local development
+
+```bash
+npx firebase-tools emulators:start --only auth,firestore --project ankveda-e6471
+cd backend && npm run build
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GCLOUD_PROJECT=ankveda-e6471 JWT_SECRET=dev \
+  node -e "require('./lib/src/http/createApp').createApp().listen(8787)"
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GCLOUD_PROJECT=ankveda-e6471 ADMIN_PASSWORD_INITIAL='…' npm run admin:provision
+cd ../admin && npm install
+ADMIN_API_PROXY=http://127.0.0.1:8787/api VITE_AUTH_EMULATOR=http://127.0.0.1:9099 npm run dev   # http://localhost:5173
+```
+
+Without `ADMIN_API_PROXY`, `npm run dev` uses the staging API. The deployed dashboard can switch between Production (same origin) and Staging (Vercel; add the Hosting origin to its `CORS_ORIGINS`).
 
 ## Checks
 

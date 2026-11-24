@@ -16,7 +16,7 @@ Code: types in `backend/src/types.ts`, typed refs in `backend/src/db/firestore.t
                         │                         │1                  └──────────────┬───────────────┘
                         │N                        │N                                 │1
                  ┌──────┴───────┐        ┌────────┴──────────┐                       │
-                 │ adminAuditLog│        │  payments         │N──────────────────────┘
+                 │ adminAuditLog│        │  transactions     │N──────────────────────┘
                  │ planId→plans │        │ {razorpayPayId}   │  userId → users
                  └──────────────┘        │ subscriptionId →  │
                                          └───────────────────┘
@@ -32,22 +32,66 @@ Code: types in `backend/src/types.ts`, typed refs in `backend/src/db/firestore.t
 | `users/{id}/chatMessages` | auto | Astrologer chat history | parent user |
 | `users/{id}/dailyGuidance` | `YYYY-MM-DD` (IST) | Daily lucky number, time, message (TTL 30 days) | parent user |
 | `plans` | auto | Paywall plans (price, period, trial) mirrored to Razorpay plans | — |
-| `subscriptions` | Razorpay subscription id | Subscription state + `planSnapshot` (terms at purchase) | `userId` → users, `planId` → plans |
-| `payments` | Razorpay payment id | Payment ledger from webhooks (trial, first charge, renewals) | `userId`, `subscriptionId`, `planId` |
+| `subscriptions` | **Razorpay subscription id** | Subscription state, `planSnapshot` (terms at purchase), Razorpay plan/customer ids, paid/total cycles, next charge, `subscriptionActivatedAt` (when the user got the subscription, counting the trial — set when the ₹49 trial starts, or at the first charge for plans without a trial; set once) | `userId` → users, `planId` → plans |
+| `subscriptions/{id}/events` | auto | Append-only status history (`fromStatus → toStatus`, Razorpay event id) | parent subscription |
+| `transactions` | **Razorpay payment id** | Every payment attempt: trial ₹49, first charge, renewals, failures (with reason), refunds | `subscriptionId` → subscriptions, `userId`, `planId` |
 | `otpChallenges` | phone | Hashed login code, attempts (TTL) | — |
 | `webhookEvents` | Razorpay event id | Exactly-once webhook processing (TTL 30 days) | — |
-| `adminAuditLog` | auto | Who changed which plan, when | `planId` → plans |
+| `adminAuditLog` | auto (`login_{uid}_{authTime}` for logins) | Append-only admin audit: `action`, `actor {uid,email}`, `targetUserId`, `subscriptionId`, `planId`, `details`. Written only by the backend, in the same transaction as the change. Entries from before admin accounts have no `actor` | `targetUserId` → users, `planId` → plans |
+| `adminStats/overview` | `overview` | Cached dashboard figures (aggregation queries, recomputed after 5 min) | — |
+| `adminDailyStats` | `YYYY-MM` (IST) | `days.{DD}`: registrations, net revenue, payments, failed payments, subscriptions started, grants. A day is final 3 days after it ends; newer days refresh every 10 min | — |
+| `userDeletions` | user id | Resumable permanent-deletion job: steps done, counts deleted, last error. Holds the phone only until the job completes | `userId` (deleted) |
+
+### Admin fields (all optional — documents written before the admin dashboard stay valid)
+
+| Field | Meaning |
+|---|---|
+| `users.nameLower` | Normalised lower-case full name for admin prefix search (written with the profile; Settings → *Rebuild name search* backfills) |
+| `users.entitlement.source`, `subscriptions.source` | `razorpay` (missing = razorpay) or `admin_grant` |
+| `subscriptions/grant_{auto}` | Complimentary access granted by an admin: `source: admin_grant`, `grant {grantedBy, notes, grantedAt}`, `razorpayPlanId: null`, no Razorpay objects and **no transactions** (never revenue) |
+| `subscriptions.accessRevokedAt` | Set by *Expire access immediately*. Caps `currentPeriodEnd` permanently — `syncSubscription` applies the cap, so a later Razorpay webhook cannot restore access |
+| `subscriptions.adminAction` | Last admin action (`cancel_renewal` / `expire_now`), who, when, notes |
+| `plans.trialEnabled` | `false` = no trial for new subscribers while keeping the configured days/amount (`effectiveTerms()`); missing = on |
+| `plans.updatedBy` | Admin who last changed the plan |
 
 ## Design decisions
 
 - **Natural keys as document ids.** Phone hash, Razorpay ids and dates make writes idempotent: a retried webhook or a double-tap upserts the same document instead of creating duplicates. It also means a webhook needs no query, just a direct lookup by id.
 - **Subcollections for user-owned data.** Ownership is in the path. Per-user queries need no composite index. Deleting an account later is one `recursiveDelete(users/{id})`. Admin and analytics use `collectionGroup('reports')`.
 - **Top-level collections for billing.** Webhooks arrive with only Razorpay ids, and finance views span all users.
-- **References are string ids, not `DocumentReference`.** They are portable in JSON, logs, the admin page and exports.
+- **References are string ids, not `DocumentReference`.** They are portable in JSON, logs, the admin dashboard and exports.
 - **Snapshots for history.** `subscriptions.planSnapshot` and `reports.profileSnapshot` keep the facts at the time, even after a plan or the profile changes.
-- **Denormalised cache with a single writer.** `users.entitlement` is derived only from `subscriptions/{id}`, inside `syncSubscription()` (a transaction), so it cannot drift.
+- **Denormalised cache, few writers.** `users.entitlement` is derived only from `subscriptions/{id}`, always in the same transaction: `syncSubscription()` for Razorpay, `grantSubscription()` / `adminExpire()` (`services/admin/subscriptionActions.ts`) for admin actions. It cannot drift.
 - **Instants are stored as Timestamps.** Any field named `…At`, `…Start`, `…End` or `…Until` is a Firestore Timestamp; the converters handle this. The API still returns epoch ms. `dob` is a calendar-date string.
 - **Every document has `schemaVersion`, `createdAt` and `updatedAt`.** Future migrations can find older documents by version.
+
+## Billing: users ⇄ subscriptions ⇄ transactions
+
+The **Razorpay subscription id** (`sub_…`) is the key that ties billing together:
+
+```
+users/{userId}.entitlement.subscriptionId ──► subscriptions/{sub_…} ◄── transactions/{pay_…}.subscriptionId
+                                               ├─ userId ──► users/{userId}
+                                               ├─ planId ──► plans/{planId}
+                                               └─ events/{auto}  (status history)
+```
+
+| Step | What is written |
+|---|---|
+| Checkout starts (`POST /subscriptions`) | `subscriptions/{sub_…}` created (status `created`, plan snapshot, trial end) + history event |
+| Payment verified in the app (`POST /subscriptions/verify`) | subscription synced from Razorpay, user entitlement set, **checkout payment recorded in `transactions`** (₹49 trial) |
+| Webhook `subscription.*` | subscription state + history event + user entitlement (single writer: `syncSubscription`) |
+| Webhook `subscription.charged` / `payment.*` | `transactions/{pay_…}` upserted: `trial` → `first_charge` → `renewal`, failures keep the reason |
+| Webhook `refund.*` | the payment is re-read from Razorpay; transaction becomes `refunded` / `partially_refunded` |
+| User cancels | in trial: cancelled immediately (₹299 never charged); otherwise at cycle end. Access continues until the paid period ends |
+| Admin grants | `subscriptions/grant_…` (`source: admin_grant`) + history event + entitlement + audit entry. Refused while a paid Razorpay subscription has access |
+| Admin *Cancel future billing* | Razorpay cancel (cycle end; trials / retries immediately) first, then subscription + history + entitlement + audit. Access until the paid period ends |
+| Admin *Expire access immediately* | Razorpay cancel (immediately) if still billable, then `accessRevokedAt` + history + entitlement + audit. If Razorpay fails, nothing is written |
+| Admin deletes a user | Razorpay billing stopped first, then transactions, subscriptions (+ events), `users/{id}` with all subcollections, OTP record. Resumable (`userDeletions/{id}`) |
+
+Rules: webhook deliveries are processed once (`webhookEvents`), transaction statuses never move backwards when webhooks arrive out of order, and payments for subscriptions Ankveda did not create are ignored (the Razorpay account is shared with other apps).
+
+Current plan: **Ankveda Premium** — 5-day trial **₹49**, then **₹299 / month** (Razorpay `plan_U42bTOOMKoDkmS`, featured). Change pricing from the admin dashboard → Paywall & Pricing (trial edits in place; a new monthly amount creates or links a new Razorpay plan and archives the old one).
 
 ## Integrity rules (Firestore has no FK constraints, so the repositories enforce them)
 
@@ -60,15 +104,21 @@ Code: types in `backend/src/types.ts`, typed refs in `backend/src/db/firestore.t
 ## Indexes & TTL (`firestore.indexes.json`)
 
 - `subscriptions(userId ↑, createdAt ↓)`: restore purchases
-- `payments(userId ↑, paidAt ↓)` and `payments(subscriptionId ↑, paidAt ↓)`: billing history
+- `transactions(userId ↑, paymentCreatedAt ↓)` and `transactions(subscriptionId ↑, paymentCreatedAt ↓)`: billing history per user / per subscription
 - collection group `reports(status ↑, updatedAt ↑)`: admin and stuck-job queries
 - TTL on `otpChallenges.expireAt`, `webhookEvents.expireAt` and `dailyGuidance.expireAt`
+- Admin dashboard (cursor pagination always orders by one field + document id):
+  - `users`: `entitlement.status` / `entitlement.planId` / `entitlement.source` / `entitlement` (null = free) with `createdAt ↓` (status, plan and registration-date filters); `entitlement.status|source|planId` with `entitlement.currentPeriodEnd` (access counts)
+  - `subscriptions`: `status` / `source` with `createdAt` (↓ lists, ↑ daily stats); `source, status, currentPeriodEnd` (lapsed-grant sweep)
+  - `transactions`: `status, paymentCreatedAt` (↓ lists, ↑ revenue aggregations)
+  - `adminAuditLog`: `action` / `targetUserId` with `createdAt ↓`
 
 Deploy with `npx firebase-tools deploy --only firestore`.
 
 ## What to revisit as the app grows
 
-- **Account deletion** (a Google Play requirement): `recursiveDelete(users/{id})` after cancelling the Razorpay renewal. The schema already supports it.
+- **Self-service account deletion** (a Google Play requirement): admins can delete users from the dashboard (`services/admin/deletion.ts`); an in-app "Delete my account" can call the same job.
+- **Financial record retention.** Deleting a user currently removes their payment records too (as chosen for the dashboard). If GST / audit retention is required, change the `transactions` step in `deletion.ts` to pseudonymise instead of delete. Razorpay keeps its own records either way.
 - **Separate staging data.** Staging (Vercel) and production (Firebase) currently share `(default)`. A second database, `staging`, needs only `FIRESTORE_DATABASE_ID=staging` on Vercel.
 - **Analytics.** Export to BigQuery (Firebase extension) instead of running heavy queries on Firestore.
 - **Chat volume.** If histories grow large, page `chatMessages` by `createdAt` and summarise older turns.

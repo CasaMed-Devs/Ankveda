@@ -1,9 +1,10 @@
 import { router } from 'expo-router';
 import { useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { ArrowCard, Card } from '@/components/Cards';
+import { Input } from '@/components/Fields';
 import { Heading } from '@/components/Heading';
 import { Screen } from '@/components/Screen';
 import { ApiError } from '@/lib/api';
@@ -75,7 +76,7 @@ export default function Chat() {
             </AppText>
           ) : null}
           <View style={styles.composer}>
-            <TextInput
+            <Input
               value={draft}
               onChangeText={setDraft}
               placeholder={isPremium ? 'Ask a question…' : 'Unlock Premium to ask a question…'}
@@ -151,7 +152,7 @@ const Bubble = ({ message }: { message: ChatMessage }) => {
 const styles = StyleSheet.create({
   list: { flex: 1 },
   listContent: { paddingBottom: 16, gap: 12 },
-  header: { gap: 32, marginBottom: 8 },
+  header: { gap: 43, marginBottom: 8 },
   introBlock: { gap: 38 },
   welcome: { padding: 18, gap: 14 },
   suggestions: { gap: 14 },

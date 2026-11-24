@@ -16,7 +16,6 @@ setGlobalOptions({ region: 'asia-south2', maxInstances: 20 });
 // Set with `firebase functions:secrets:set NAME` (or backend/.secret.local for the emulator).
 const secrets = {
   jwt: defineSecret('JWT_SECRET'),
-  adminPassword: defineSecret('ADMIN_PASSWORD'),
   openaiKey: defineSecret('OPENAI_API_KEY'),
   astrologyKey: defineSecret('ASTROLOGY_API_KEY'),
   voicensmsKey: defineSecret('VOICENSMS_API_KEY'),

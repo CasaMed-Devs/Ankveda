@@ -70,7 +70,9 @@ export default function Splash() {
         </View>
 
         <View style={styles.titleBlock}>
-          <AppText style={styles.wordmark}>ANKVEDA</AppText>
+          <AppText style={styles.wordmark} allowFontScaling={false}>
+            ANKVEDA
+          </AppText>
           <AppText style={styles.tagline}>{'NUMEROLOGY & KUNDALI'}</AppText>
         </View>
 

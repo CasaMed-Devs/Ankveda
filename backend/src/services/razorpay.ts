@@ -4,6 +4,7 @@ import { validatePaymentVerification, validateWebhookSignature } from 'razorpay/
 import { config } from '../config';
 import { HttpError } from '../lib/http';
 import type { PlanDoc, PlanPeriod } from '../types';
+import { effectiveTerms } from './billingRules';
 
 let client: Razorpay | null = null;
 
@@ -17,7 +18,7 @@ const getClient = () => {
 };
 
 // How many billing cycles a subscription runs before it ends (Razorpay requires a total_count).
-const TOTAL_COUNT: Record<PlanPeriod, number> = { daily: 365, weekly: 260, monthly: 120, yearly: 10 };
+export const TOTAL_COUNT: Record<PlanPeriod, number> = { daily: 365, weekly: 260, monthly: 120, yearly: 10 };
 
 export const createRazorpayPlan = async (plan: Pick<PlanDoc, 'name' | 'description' | 'priceInPaise' | 'period' | 'interval'>) => {
   const created = await getClient().plans.create({
@@ -39,7 +40,8 @@ export const createRazorpaySubscription = async (args: {
   uid: string;
   phone: string;
 }) => {
-  const { plan } = args;
+  // Effective terms: a trial switched off in the admin dashboard is not applied.
+  const plan = { ...args.plan, ...effectiveTerms(args.plan) };
   const hasTrial = plan.trialDays > 0;
   const subscription = await getClient().subscriptions.create({
     plan_id: plan.razorpayPlanId,
@@ -55,9 +57,33 @@ export const createRazorpaySubscription = async (args: {
   return subscription;
 };
 
+/** An existing Razorpay plan (admin "use existing plan id" — amount/period are validated against it). */
+export const fetchRazorpayPlan = async (id: string) => {
+  const plan = await getClient().plans.fetch(id);
+  const item = (plan as { item?: { amount?: number | string; currency?: string; name?: string } }).item ?? {};
+  return {
+    id: plan.id,
+    period: plan.period as PlanPeriod,
+    interval: Number(plan.interval),
+    amountInPaise: Number(item.amount ?? 0),
+    currency: item.currency ?? 'INR',
+    name: item.name ?? null,
+  };
+};
+
 export const fetchRazorpaySubscription = (id: string) => getClient().subscriptions.fetch(id);
 
-export const cancelRazorpaySubscription = (id: string) => getClient().subscriptions.cancel(id, true);
+export const fetchRazorpayPayment = (id: string) => getClient().payments.fetch(id);
+
+/** Subscription payments carry an invoice id; the invoice names the subscription. */
+export const subscriptionIdForInvoice = async (invoiceId: string) =>
+  ((await getClient().invoices.fetch(invoiceId)) as { subscription_id?: string | null }).subscription_id ?? null;
+
+/**
+ * Cancels renewal. During the trial (status "authenticated") Razorpay has no running cycle, so the
+ * subscription is cancelled immediately — the ₹299 first charge never happens. Otherwise it ends at cycle end.
+ */
+export const cancelRazorpaySubscription = (id: string, atCycleEnd: boolean) => getClient().subscriptions.cancel(id, atCycleEnd);
 
 export const verifyCheckoutSignature = (paymentId: string, subscriptionId: string, signature: string) => {
   const keys = config.razorpay;

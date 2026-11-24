@@ -17,6 +17,9 @@ const withNumbers = (fullName: string, dob: string): UserProfile => ({
   numbers: { birth: birthNumber(dob).value, lifePath: lifePath(dob).value, name: nameNumber(fullName).value },
 });
 
+/** Normalised name for admin prefix search ("Aarav  Sharma" → "aarav sharma"). */
+export const searchName = (fullName: string) => fullName.trim().replace(/\s+/g, ' ').toLowerCase();
+
 export const usersRepo = {
   get: async (userId: string): Promise<UserDoc | null> => (await refs.user(userId).get()).data() ?? null,
 
@@ -60,6 +63,7 @@ export const usersRepo = {
       const next: UserDoc = {
         ...user,
         profile: withNumbers(fullName, dob),
+        nameLower: searchName(fullName),
         profileCompletedAt: user.profileCompletedAt ?? now,
         updatedAt: now,
       };

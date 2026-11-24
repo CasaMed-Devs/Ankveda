@@ -1,10 +1,11 @@
 import {
   SCHEMA_VERSION,
-  type PaymentDoc,
   type PlanDoc,
   type PlanTerms,
   type SubscriptionDoc,
+  type TransactionDoc,
 } from '../../types';
+import { effectiveTerms } from '../../services/billingRules';
 import { db, refs } from '../firestore';
 
 export type PlanWithId = PlanDoc & { id: string };
@@ -59,36 +60,39 @@ export const plansRepo = {
     }),
 };
 
-export const termsOf = (plan: PlanDoc): PlanTerms => ({
-  name: plan.name,
-  priceInPaise: plan.priceInPaise,
-  period: plan.period,
-  interval: plan.interval,
-  trialDays: plan.trialDays,
-  trialPriceInPaise: plan.trialPriceInPaise,
-});
+/** Terms a new subscriber gets (trial switched off = no trial). */
+export const termsOf = (plan: PlanDoc): PlanTerms => effectiveTerms(plan);
 
 export const subscriptionsRepo = {
   get: async (subscriptionId: string): Promise<SubscriptionDoc | null> =>
     (await refs.subscriptions().doc(subscriptionId).get()).data() ?? null,
 
-  /** Created when checkout starts; verifies both foreign keys exist first. */
-  createPending: (subscriptionId: string, userId: string, planId: string) =>
+  /**
+   * Created when checkout starts, keyed by the Razorpay subscription id.
+   * Verifies both foreign keys (user, plan) exist inside the same transaction.
+   */
+  createPending: (args: { subscriptionId: string; userId: string; planId: string; totalCount: number; startAt: number | null }) =>
     db.runTransaction(async (tx) => {
-      const [user, plan] = await Promise.all([tx.get(refs.user(userId)), tx.get(refs.plans().doc(planId))]);
-      if (!user.exists) throw new Error(`User ${userId} not found`);
+      const [user, plan] = await Promise.all([tx.get(refs.user(args.userId)), tx.get(refs.plans().doc(args.planId))]);
+      if (!user.exists) throw new Error(`User ${args.userId} not found`);
       const planDoc = plan.data();
-      if (!planDoc) throw new Error(`Plan ${planId} not found`);
+      if (!planDoc) throw new Error(`Plan ${args.planId} not found`);
       const now = Date.now();
       const doc: SubscriptionDoc = {
         schemaVersion: SCHEMA_VERSION,
-        userId,
-        planId,
+        userId: args.userId,
+        planId: args.planId,
         planSnapshot: termsOf(planDoc),
+        razorpayPlanId: planDoc.razorpayPlanId,
+        razorpayCustomerId: null,
         status: 'created',
-        startAt: null,
+        startAt: args.startAt,
         currentPeriodStart: null,
         currentPeriodEnd: null,
+        nextChargeAt: args.startAt,
+        paidCount: 0,
+        totalCount: args.totalCount,
+        subscriptionActivatedAt: null,
         cancelAtPeriodEnd: false,
         cancelledAt: null,
         endedAt: null,
@@ -96,9 +100,22 @@ export const subscriptionsRepo = {
         createdAt: now,
         updatedAt: now,
       };
-      tx.create(refs.subscriptions().doc(subscriptionId), doc);
+      tx.create(refs.subscriptions().doc(args.subscriptionId), doc);
+      tx.create(refs.subscriptionEvents(args.subscriptionId).doc(), {
+        event: 'checkout.created',
+        fromStatus: null,
+        toStatus: 'created',
+        razorpayEventId: null,
+        receivedAt: now,
+      });
       return doc;
     }),
+
+  /** Status history, newest first. */
+  events: async (subscriptionId: string, limit = 50) => {
+    const snap = await refs.subscriptionEvents(subscriptionId).orderBy('receivedAt', 'desc').limit(limit).get();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
 
   listByUser: async (userId: string, limit: number) => {
     const snap = await refs.subscriptions().where('userId', '==', userId).orderBy('createdAt', 'desc').limit(limit).get();
@@ -111,18 +128,23 @@ export const subscriptionsRepo = {
   },
 };
 
-export const paymentsRepo = {
-  /** Idempotent: keyed by the Razorpay payment id, so webhook retries never duplicate a payment. */
-  upsert: (paymentId: string, payment: Omit<PaymentDoc, 'schemaVersion' | 'createdAt' | 'updatedAt'>) =>
-    db.runTransaction(async (tx) => {
-      const ref = refs.payments().doc(paymentId);
-      const existing = (await tx.get(ref)).data();
-      const now = Date.now();
-      tx.set(ref, { ...payment, schemaVersion: SCHEMA_VERSION, createdAt: existing?.createdAt ?? now, updatedAt: now });
-    }),
+export type TransactionWithId = TransactionDoc & { id: string };
 
-  list: async (limit: number) => {
-    const snap = await refs.payments().orderBy('paidAt', 'desc').limit(limit).get();
+export const transactionsRepo = {
+  get: async (paymentId: string): Promise<TransactionDoc | null> => (await refs.transactions().doc(paymentId).get()).data() ?? null,
+
+  list: async (limit: number): Promise<TransactionWithId[]> => {
+    const snap = await refs.transactions().orderBy('paymentCreatedAt', 'desc').limit(limit).get();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  listByUser: async (userId: string, limit: number): Promise<TransactionWithId[]> => {
+    const snap = await refs.transactions().where('userId', '==', userId).orderBy('paymentCreatedAt', 'desc').limit(limit).get();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  listBySubscription: async (subscriptionId: string, limit: number): Promise<TransactionWithId[]> => {
+    const snap = await refs.transactions().where('subscriptionId', '==', subscriptionId).orderBy('paymentCreatedAt', 'desc').limit(limit).get();
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
 };

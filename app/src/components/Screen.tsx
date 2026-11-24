@@ -2,7 +2,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -32,6 +31,14 @@ type ScreenProps = {
 };
 
 export const TAB_BAR_SPACE = 96;
+const FOOTER_BOTTOM_GAP = 20;
+
+/** Small note shown above a footer button ("Your details stay private and secure.") — Figma keeps ~28pt to the button. */
+export const FooterNote = ({ children, color }: { children: ReactNode; color?: string }) => (
+  <AppText variant="small" align="center" color={color} style={styles.footerNote}>
+    {children}
+  </AppText>
+);
 
 export const ScreenBackground = ({ children }: { children: ReactNode }) => (
   <LinearGradient colors={backgroundGradient} style={styles.fill}>
@@ -50,7 +57,8 @@ export const Screen = ({
   contentStyle,
 }: ScreenProps) => {
   const insets = useSafeAreaInsets();
-  const bottomPad = withTabBar ? TAB_BAR_SPACE + insets.bottom : Math.max(insets.bottom, 16);
+  // Figma: bottom buttons sit ~22pt above the home indicator / gesture area.
+  const bottomPad = withTabBar ? TAB_BAR_SPACE + insets.bottom : insets.bottom + FOOTER_BOTTOM_GAP;
 
   const header = showBrand ? (
     <View style={styles.header}>
@@ -72,10 +80,8 @@ export const Screen = ({
 
   return (
     <ScreenBackground>
-      <KeyboardAvoidingView
-        style={[styles.fill, { paddingTop: insets.top + spacing.screenTop }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      {/* Android is edge-to-edge (the window no longer resizes for the keyboard), so pad on both platforms. */}
+      <KeyboardAvoidingView style={[styles.fill, { paddingTop: insets.top + spacing.screenTop }]} behavior="padding">
         {scroll ? (
           <ScrollView
             style={styles.fill}
@@ -105,4 +111,5 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   footer: { paddingHorizontal: spacing.gutter, paddingTop: 12, gap: 14 },
+  footerNote: { marginBottom: 14 },
 });

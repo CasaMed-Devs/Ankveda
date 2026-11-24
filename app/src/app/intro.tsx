@@ -21,19 +21,38 @@ import { colors, fonts, spacing } from '@/theme/tokens';
 
 type Slide = { key: string; cta: string; render: () => React.ReactNode };
 
-const NumbersSlide = () => (
+/** Hero headline: fixed size (display type, matches Figma on every phone). */
+const Hero = ({ children, style }: { children: React.ReactNode; style: React.ComponentProps<typeof AppText>['style'] }) => (
+  <AppText style={style} allowFontScaling={false}>
+    {children}
+  </AppText>
+);
+
+/**
+ * Title stays at the top (Figma: 48 below the brand); the visual block is centred in the
+ * remaining height, so taller phones don't get an empty band above the dots.
+ */
+const SlideLayout = ({ title, children }: { title: React.ReactNode; children: React.ReactNode }) => (
   <View style={styles.slideBody}>
-    <View style={styles.titleGroup}>
-      <AppText style={[styles.heroSerif, { fontSize: 48, lineHeight: 50 }]}>{'Your Numbers\nCan Shape'}</AppText>
-      <AppText style={[styles.heroItalic, { fontSize: 53, lineHeight: 55 }]}>Your Future</AppText>
-    </View>
-    <View style={styles.dialWrap}>
-      <NumberDial value={7} />
-    </View>
-    <AppText variant="small" align="center" color={colors.cream}>
+    <View style={styles.titleGroup}>{title}</View>
+    <View style={styles.visual}>{children}</View>
+  </View>
+);
+
+const NumbersSlide = () => (
+  <SlideLayout
+    title={
+      <>
+        <Hero style={[styles.heroSerif, { fontSize: 48, lineHeight: 50 }]}>{'Your Numbers\nCan Shape'}</Hero>
+        <Hero style={[styles.heroItalic, { fontSize: 53, lineHeight: 56 }]}>Your Future</Hero>
+      </>
+    }
+  >
+    <NumberDial value={7} />
+    <AppText variant="small" align="center" color={colors.cream} style={styles.dialCaption}>
       {'Personality   /   Opportunities   /   Future'}
     </AppText>
-  </View>
+  </SlideLayout>
 );
 
 const CHANGE_ITEMS = [
@@ -43,15 +62,20 @@ const CHANGE_ITEMS = [
 ];
 
 const ChangeSlide = () => (
-  <View style={styles.slideBody}>
-    <View style={[styles.titleGroup, { marginTop: 4 }]}>
-      <AppText style={[styles.heroMedium, { fontSize: 43, lineHeight: 45 }]}>Change a Number,</AppText>
-      <AppText style={[styles.heroItalic, { fontSize: 42, lineHeight: 44 }]}>Change Your Results</AppText>
-    </View>
+  <SlideLayout
+    title={
+      <>
+        <Hero style={[styles.heroMedium, { fontSize: 43, lineHeight: 45 }]}>Change a Number,</Hero>
+        <Hero style={[styles.heroItalic, { fontSize: 42, lineHeight: 45 }]}>Change Your Results</Hero>
+      </>
+    }
+  >
     <View style={styles.changeList}>
       {CHANGE_ITEMS.map((item) => (
         <Card key={item.title} tone="soft" style={styles.changeCard}>
-          <AppText style={styles.changeGlyph}>{item.glyph}</AppText>
+          <AppText style={styles.changeGlyph} allowFontScaling={false}>
+            {item.glyph}
+          </AppText>
           <View style={styles.changeText}>
             <AppText style={styles.changeTitle}>{item.title}</AppText>
             <AppText variant="body" style={styles.changeBody}>
@@ -61,23 +85,30 @@ const ChangeSlide = () => (
         </Card>
       ))}
     </View>
-  </View>
+  </SlideLayout>
 );
 
 const LuckySlide = () => (
-  <View style={styles.slideBody}>
-    <View style={[styles.titleGroup, { marginTop: 4 }]}>
-      <AppText style={[styles.heroMedium, { fontSize: 50, lineHeight: 52 }]}>Get Your</AppText>
-      <AppText style={[styles.heroItalic, { fontSize: 58, lineHeight: 60 }]}>Lucky Edge</AppText>
-    </View>
+  <SlideLayout
+    title={
+      <>
+        <Hero style={[styles.heroMedium, { fontSize: 50, lineHeight: 52 }]}>Get Your</Hero>
+        <Hero style={[styles.heroItalic, { fontSize: 58, lineHeight: 62 }]}>Lucky Edge</Hero>
+      </>
+    }
+  >
     <View style={styles.luckyGroup}>
       <View style={styles.luckyRow}>
         <Card tone="soft" style={[styles.luckyCard, styles.luckyNumberCard]}>
-          <AppText style={styles.luckyBig}>7</AppText>
+          <AppText style={styles.luckyBig} allowFontScaling={false}>
+            7
+          </AppText>
           <AppText style={styles.luckyLabel}>{'Lucky\nNumber'}</AppText>
         </Card>
         <Card tone="soft" style={[styles.luckyCard, styles.luckyTimeCard]}>
-          <AppText style={styles.luckyTime}>09:09</AppText>
+          <AppText style={styles.luckyTime} allowFontScaling={false}>
+            09:09
+          </AppText>
           <AppText style={styles.luckyLabel}>{'Lucky\nTiming'}</AppText>
         </Card>
       </View>
@@ -88,7 +119,7 @@ const LuckySlide = () => (
         <AppText style={styles.astroTitle}>{'Consult with\nan Astrologer'}</AppText>
       </Card>
     </View>
-  </View>
+  </SlideLayout>
 );
 
 const SLIDES: Slide[] = [
@@ -168,22 +199,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.gutter,
   },
   slideBody: { flex: 1, paddingHorizontal: spacing.gutter, paddingTop: 48 },
+  visual: { flex: 1, justifyContent: 'center', paddingVertical: 24 },
   titleGroup: { gap: 4 },
   heroSerif: { fontFamily: fonts.serifSemiBold, color: colors.cream },
   heroMedium: { fontFamily: fonts.serifMedium, color: colors.cream },
   heroItalic: { fontFamily: fonts.serifMediumItalic, color: colors.gold },
-  dialWrap: { marginTop: 44, marginBottom: 37 },
-  changeList: { marginTop: 92, gap: 16 },
+  dialCaption: { marginTop: 37 },
+  changeList: { gap: 16 },
   changeCard: { flexDirection: 'row', paddingHorizontal: 18, paddingVertical: 16, gap: 18 },
   changeGlyph: { width: 66, fontFamily: fonts.serifMedium, fontSize: 44, lineHeight: 46, color: colors.gold },
   changeText: { flex: 1, gap: 8 },
   changeTitle: { fontFamily: fonts.serifSemiBold, fontSize: 25, lineHeight: 26, color: colors.cream },
   changeBody: { fontSize: 13, lineHeight: 19 },
-  luckyGroup: { marginTop: 82, gap: 20 },
+  luckyGroup: { gap: 20 },
   luckyRow: { flexDirection: 'row', gap: 17 },
   luckyCard: { height: 170 },
   luckyNumberCard: { flex: 1, paddingHorizontal: 20, paddingVertical: 12, justifyContent: 'center', gap: 10 },
-  luckyTimeCard: { width: 164, paddingHorizontal: 16, paddingVertical: 19, justifyContent: 'space-between' },
+  // Figma: both lucky cards are the same width (~164).
+  luckyTimeCard: { flex: 1, paddingHorizontal: 16, paddingVertical: 19, justifyContent: 'space-between' },
   luckyBig: { fontFamily: fonts.serifMedium, fontSize: 75, lineHeight: 77, color: colors.gold },
   luckyTime: { fontFamily: fonts.serifMedium, fontSize: 31, lineHeight: 32, color: colors.gold },
   luckyLabel: { fontFamily: fonts.serifMedium, fontSize: 25, lineHeight: 26, color: colors.cream },

@@ -37,11 +37,15 @@ export default function Daily() {
           <>
             <Card style={styles.luckyCard}>
               <View style={styles.luckyNumber}>
-                <AppText style={styles.bigNumber}>{data.luckyNumber}</AppText>
+                <AppText style={styles.bigNumber} allowFontScaling={false}>
+                  {data.luckyNumber}
+                </AppText>
                 <AppText style={styles.luckyLabel}>LUCKY NUMBER</AppText>
               </View>
               <View style={styles.luckyTime}>
-                <AppText style={styles.time}>{data.luckyTime}</AppText>
+                <AppText style={styles.time} allowFontScaling={false}>
+                  {data.luckyTime}
+                </AppText>
                 <AppText style={styles.luckyLabel}>LUCKY TIMING</AppText>
               </View>
             </Card>
@@ -83,5 +87,5 @@ const styles = StyleSheet.create({
   reflection: { paddingHorizontal: 20, paddingVertical: 16, gap: 16 },
   reflectionTitle: { fontSize: 28, lineHeight: 30 },
   reflectionBody: { fontSize: 13, lineHeight: 19 },
-  note: { marginTop: 32 },
+  note: { marginTop: 'auto', paddingTop: 32 },
 });

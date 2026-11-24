@@ -42,6 +42,6 @@ export default function ChooseReport() {
 }
 
 const styles = StyleSheet.create({
-  list: { marginTop: 40, gap: 11 },
+  list: { marginTop: 31, gap: 11 },
   note: { marginTop: 28 },
 });

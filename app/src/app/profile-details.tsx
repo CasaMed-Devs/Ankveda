@@ -6,7 +6,7 @@ import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { DateField, TextField } from '@/components/Fields';
 import { Heading } from '@/components/Heading';
-import { Screen } from '@/components/Screen';
+import { FooterNote, Screen } from '@/components/Screen';
 import { ApiError } from '@/lib/api';
 import { formatPhone } from '@/lib/format';
 import { useMe, useUpdateMe } from '@/lib/queries';
@@ -38,13 +38,13 @@ export default function ProfileDetails() {
       footer={
         <>
           {update.error ? (
-            <AppText variant="small" align="center" color={colors.danger}>
+            <FooterNote color={colors.danger}>
               {update.error instanceof ApiError ? update.error.message : 'Could not save. Please try again.'}
-            </AppText>
+            </FooterNote>
           ) : (
-            <AppText variant="small" align="center">
+            <FooterNote>
               Your information stays private.
-            </AppText>
+            </FooterNote>
           )}
           <PrimaryButton label="Save details" onPress={save} loading={update.isPending} disabled={!valid} />
         </>

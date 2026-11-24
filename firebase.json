@@ -4,8 +4,22 @@
       "source": "backend",
       "codebase": "default",
       "runtime": "nodejs22",
-      "ignore": ["node_modules", ".git", "src", "api", "public", ".vercel", "*.log", ".secret.local", ".env.local", "service-account*.json"],
-      "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run build"]
+      "ignore": [
+        "node_modules",
+        ".git",
+        "src/**",
+        "api/**",
+        "public/**",
+        ".vercel",
+        "*.log",
+        ".secret.local",
+        ".env.local",
+        "service-account*.json",
+        "scripts/**"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
     }
   ],
   "firestore": {
@@ -13,17 +27,83 @@
     "indexes": "firestore.indexes.json"
   },
   "hosting": {
-    "public": "admin",
-    "ignore": ["firebase.json", "**/.*"],
+    "public": "admin/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*"
+    ],
+    "predeploy": [
+      "npm --prefix admin ci",
+      "npm --prefix admin run build"
+    ],
     "rewrites": [
-      { "source": "/api/**", "function": { "functionId": "api", "region": "asia-south2" } }
+      {
+        "source": "/api/**",
+        "function": {
+          "functionId": "api",
+          "region": "asia-south2"
+        }
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/assets/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          }
+        ]
+      },
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          }
+        ]
+      },
+      {
+        "source": "/index.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      }
     ]
   },
   "emulators": {
-    "functions": { "port": 5001 },
-    "firestore": { "port": 8080 },
-    "hosting": { "port": 5000 },
-    "ui": { "enabled": true, "port": 4000 },
+    "auth": {
+      "port": 9099
+    },
+    "functions": {
+      "port": 5001
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "hosting": {
+      "port": 5000
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    },
     "singleProjectMode": true
   }
 }

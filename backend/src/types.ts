@@ -13,11 +13,16 @@
  *   users/{userId}/chatMessages/{messageId}      → user (parent)
  *   users/{userId}/dailyGuidance/{YYYY-MM-DD}    → user (parent), TTL expireAt
  *   plans/{planId}                               never hard-deleted (subscriptions reference it)
- *   subscriptions/{razorpaySubscriptionId}       → users.userId, → plans.planId
- *   payments/{razorpayPaymentId}                 → users, → subscriptions, → plans
+ *   subscriptions/{razorpaySubscriptionId}       → users.userId, → plans.planId   (users.entitlement.subscriptionId → here)
+ *   subscriptions/{id}/events/{auto}             append-only status history
+ *   transactions/{razorpayPaymentId}             → subscriptions (subscriptionId), → users, → plans
  *   otpChallenges/{phone}                        TTL expireAt
  *   webhookEvents/{razorpayEventId}              TTL expireAt (dedupe log)
- *   adminAuditLog/{auto}                         → plans
+ *   adminAuditLog/{auto}                         → users (targetUserId), → plans   (server-written, append-only)
+ *   adminStats/overview                          cached dashboard aggregations
+ *   adminDailyStats/{YYYY-MM}                    cached per-day statistics (IST)
+ *   userDeletions/{userId}                       resumable permanent-deletion job
+ *   subscriptions/grant_{auto}                   admin grants (source 'admin_grant', no Razorpay objects)
  *
  * The API contract with the app is defined at the bottom (Public*) — keep in sync with app/src/lib/types.ts.
  */
@@ -48,7 +53,16 @@ export type SubscriptionStatus =
   | 'completed'
   | 'expired';
 
-/** Denormalised cache of the user's current subscription. Only written by syncSubscription(). */
+/** Who paid for a subscription: Razorpay checkout, or a complimentary grant by an admin (never revenue). */
+export type SubscriptionSource = 'razorpay' | 'admin_grant';
+
+/** An admin (Firebase Auth user with the `admin` custom claim). */
+export type AdminActor = { uid: string; email: string | null };
+
+/**
+ * Denormalised cache of the user's current subscription. Only written by services/billing.ts
+ * (syncSubscription for Razorpay, grantSubscription / adminExpire for admin actions).
+ */
 export type StoredEntitlement = {
   status: SubscriptionStatus;
   subscriptionId: string | null;
@@ -56,12 +70,16 @@ export type StoredEntitlement = {
   planName: string | null;
   currentPeriodEnd: number | null;
   cancelAtPeriodEnd: boolean;
+  /** Missing on older documents = 'razorpay'. */
+  source?: SubscriptionSource;
 };
 
 export type UserDoc = Audited & {
   phone: string;
   countryCode: '+91';
   profile: UserProfile | null;
+  /** Lower-cased full name for admin prefix search (written with the profile). */
+  nameLower?: string | null;
   profileCompletedAt: number | null;
   entitlement: StoredEntitlement | null;
   /** astrologyapi.com chat session, tied to the birth details it was started with. */
@@ -168,35 +186,107 @@ export type PlanDoc = Audited &
     active: boolean;
     razorpayPlanId: string;
     archivedAt: number | null;
+    /**
+     * The trial is applied when a subscription is created (start_at delay + add-on), not in the
+     * Razorpay plan, so it can be switched off or changed in place. Missing = enabled.
+     * Use effectiveTerms()/termsOf(): trialDays and trialPriceInPaise keep the configured values.
+     */
+    trialEnabled?: boolean;
+    /** Admin who last changed this plan. */
+    updatedBy?: AdminActor | null;
   };
 
+/**
+ * subscriptions/{razorpaySubscriptionId} — the Razorpay subscription id is the primary key and the
+ * foreign key used by users.entitlement.subscriptionId and transactions.subscriptionId.
+ */
 export type SubscriptionDoc = Audited & {
   userId: string;
   planId: string;
   /** Plan terms at purchase time — plans are immutable in Razorpay and can be replaced. */
   planSnapshot: PlanTerms;
+  /** null for admin grants (no Razorpay objects exist — ids are never invented). */
+  razorpayPlanId: string | null;
+  razorpayCustomerId: string | null;
   status: SubscriptionStatus;
   /** First recurring charge (end of trial). */
   startAt: number | null;
   currentPeriodStart: number | null;
   currentPeriodEnd: number | null;
+  /** Next scheduled charge. */
+  nextChargeAt: number | null;
+  /** Billing cycles paid so far / total cycles the subscription runs for. */
+  paidCount: number;
+  totalCount: number;
+  /**
+   * When the user got the subscription, counting the trial: set when the ₹49 trial starts
+   * ("authenticated"), or at the first charge for plans without a trial ("active").
+   * Set once, never overwritten; null until checkout is paid.
+   */
+  subscriptionActivatedAt: number | null;
   cancelAtPeriodEnd: boolean;
   cancelledAt: number | null;
   endedAt: number | null;
   lastEvent: { name: string; receivedAt: number } | null;
+  /**
+   * 'admin_grant' subscriptions have an id "grant_…", no Razorpay objects and no transactions.
+   * Missing on older documents = 'razorpay'.
+   */
+  source?: SubscriptionSource;
+  grant?: { grantedBy: AdminActor; notes: string | null; grantedAt: number } | null;
+  /**
+   * Set when an admin ends access immediately. Caps currentPeriodEnd for good, so a later
+   * Razorpay webhook (e.g. subscription.cancelled) cannot restore access.
+   */
+  accessRevokedAt?: number | null;
+  /** Last admin action on this subscription (expire / cancel renewal). */
+  adminAction?: { type: AdminExpireMode; by: AdminActor; notes: string | null; performedAt: number } | null;
 };
 
-export type PaymentDoc = Audited & {
+/**
+ * cancel_renewal — stop future Razorpay charges; access continues until the paid period ends.
+ * expire_now     — end access immediately (and stop Razorpay billing if it is still running).
+ */
+export type AdminExpireMode = 'cancel_renewal' | 'expire_now';
+
+/** subscriptions/{subscriptionId}/events/{auto} — append-only audit trail of every state change. */
+export type SubscriptionEventDoc = {
+  event: string;
+  fromStatus: SubscriptionStatus | null;
+  toStatus: SubscriptionStatus;
+  /** Razorpay webhook event id (null for checkout / restore / cancel calls). */
+  razorpayEventId: string | null;
+  receivedAt: number;
+};
+
+export type TransactionStatus = 'created' | 'authorized' | 'captured' | 'failed' | 'refunded' | 'partially_refunded';
+export type TransactionKind = 'trial' | 'first_charge' | 'renewal';
+
+/**
+ * transactions/{razorpayPaymentId} — every payment attempt for a subscription (success, failure, refund).
+ * Linked by subscriptionId (Razorpay subscription id) → subscriptions, and userId → users.
+ */
+export type TransactionDoc = Audited & {
   userId: string;
   subscriptionId: string;
   planId: string;
+  razorpayInvoiceId: string | null;
+  razorpayOrderId: string | null;
   amountInPaise: number;
+  refundedAmountInPaise: number;
+  /** Razorpay fee + GST on it, when reported. */
+  feeInPaise: number | null;
   currency: string;
-  status: 'captured' | 'authorized' | 'failed' | 'refunded';
+  status: TransactionStatus;
+  kind: TransactionKind;
   method: string | null;
-  kind: 'trial' | 'renewal' | 'first_charge';
-  invoiceId: string | null;
-  paidAt: number;
+  errorCode: string | null;
+  errorDescription: string | null;
+  /** When Razorpay created the payment. */
+  paymentCreatedAt: number;
+  capturedAt: number | null;
+  failedAt: number | null;
+  refundedAt: number | null;
 };
 
 // ── Operational ──────────────────────────────────────────────────────────────
@@ -223,11 +313,83 @@ export type WebhookEventDoc = {
   expireAt: number;
 };
 
+export type AuditAction =
+  | 'admin.login'
+  | 'plan.create'
+  | 'plan.update'
+  | 'pricing.update'
+  | 'subscription.grant'
+  | 'subscription.expire'
+  | 'subscription.cancel_renewal'
+  | 'user.delete'
+  | 'maintenance.run';
+
+/**
+ * adminAuditLog/{auto} — written only by the backend (Firestore rules deny every client).
+ * Entries from before admin accounts existed have no `actor` (shared-password admin).
+ */
 export type AuditLogDoc = {
-  action: 'plan.create' | 'plan.update';
-  planId: string;
-  changes: Record<string, unknown>;
+  action: AuditAction;
+  actor?: AdminActor | null;
+  targetUserId?: string | null;
+  subscriptionId?: string | null;
+  planId?: string | null;
+  /** What changed. Never holds names or phone numbers of deleted users. */
+  details?: Record<string, unknown>;
+  /** Legacy field of plan.create / plan.update entries. */
+  changes?: Record<string, unknown>;
   createdAt: number;
+};
+
+/** adminStats/overview — cached dashboard figures (recomputed by aggregation queries, never incremented). */
+export type AdminOverviewDoc = {
+  computedAt: number;
+  users: { total: number; today: number; yesterday: number; thisMonth: number; lastMonth: number };
+  access: { trial: number; paid: number; granted: number; cancelling: number; expired: number; free: number };
+  subscriptions: { purchases: number; grants: number; byStatus: Partial<Record<SubscriptionStatus, number>> };
+  revenue: {
+    totalInPaise: number;
+    successfulPayments: number;
+    todayInPaise: number;
+    yesterdayInPaise: number;
+    thisMonthInPaise: number;
+    lastMonthInPaise: number;
+    failedPayments7d: number;
+    refundedInPaise: number;
+  };
+  plans: { planId: string; name: string; subscribers: number }[];
+};
+
+/** One day in adminDailyStats/{YYYY-MM}.days[DD] (IST calendar days). */
+export type DailyStat = {
+  registrations: number;
+  /** Net of refunds, successful payments only (grants are never revenue). */
+  revenueInPaise: number;
+  payments: number;
+  failedPayments: number;
+  newSubscriptions: number;
+  grants: number;
+};
+
+export type DailyStatsMonthDoc = {
+  days: Record<string, DailyStat & { computedAt: number }>;
+  updatedAt: number;
+};
+
+export type UserDeletionStep = 'cancelRazorpay' | 'subscriptions' | 'transactions' | 'userData' | 'otp';
+
+/** userDeletions/{userId} — resumable permanent deletion job (no personal data). */
+export type UserDeletionDoc = {
+  status: 'running' | 'failed' | 'completed';
+  steps: Partial<Record<UserDeletionStep, number>>;
+  requestedBy: AdminActor;
+  /** Kept for the phone-keyed OTP record; cleared once the job completes. */
+  phone: string | null;
+  deleted: { subscriptions: number; transactions: number; paymentsInPaise: number };
+  lastError: string | null;
+  createdAt: number;
+  updatedAt: number;
+  completedAt: number | null;
 };
 
 // ── Public API shapes (what the app receives) ────────────────────────────────

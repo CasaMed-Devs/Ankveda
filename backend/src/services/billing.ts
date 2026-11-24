@@ -1,43 +1,75 @@
 import { refs, db } from '../db/firestore';
-import { paymentsRepo } from '../db/repositories/billing';
 import { usersRepo } from '../db/repositories/users';
 import { logger } from '../lib/logger';
-import type { StoredEntitlement, SubscriptionDoc, UserDoc } from '../types';
-import { computeEntitlement, subscriptionStateFromRazorpay } from './entitlement';
-import type { fetchRazorpaySubscription } from './razorpay';
+import { SCHEMA_VERSION, type StoredEntitlement, type SubscriptionDoc, type UserDoc } from '../types';
+import {
+  activationTimeFor,
+  capPeriodEnd,
+  mergeTransaction,
+  subscriptionStateFromRazorpay,
+  transactionKindOf,
+  type RazorpayPaymentLike,
+  type RazorpaySubscriptionLike,
+} from './billingRules';
+import { computeEntitlement } from './entitlement';
+import { subscriptionIdForInvoice } from './razorpay';
 
-export type RazorpaySubscriptionEntity = Awaited<ReturnType<typeof fetchRazorpaySubscription>>;
+export type RazorpaySubscriptionEntity = RazorpaySubscriptionLike & { notes?: unknown };
+
+type SyncSource = { event: string; razorpayEventId?: string | null };
 
 /**
  * The single writer of subscription state and the user's entitlement cache.
- * Called from checkout verification, restore, cancel and webhooks — all idempotent.
+ * Updates subscriptions/{id}, appends to subscriptions/{id}/events and refreshes
+ * users/{userId}.entitlement — all in one Firestore transaction. Idempotent.
  */
-export const syncSubscription = async (entity: RazorpaySubscriptionEntity, eventName = 'sync') => {
+export const syncSubscription = async (entity: RazorpaySubscriptionEntity, source: SyncSource) => {
   const subRef = refs.subscriptions().doc(entity.id);
   return db.runTransaction(async (tx) => {
     const stored = (await tx.get(subRef)).data();
-    const notes = (entity.notes ?? {}) as Record<string, string>;
-    const userId = stored?.userId ?? notes.uid;
-    if (!stored || !userId) {
-      logger.warn('Razorpay subscription not created through Ankveda checkout', { id: entity.id });
+    if (!stored) {
+      logger.warn('Razorpay subscription not created through Ankveda checkout', { id: entity.id, event: source.event });
       return null;
     }
-    const userRef = refs.user(userId);
+    const userRef = refs.user(stored.userId);
     const user = (await tx.get(userRef)).data();
     if (!user) return null;
 
     const state = subscriptionStateFromRazorpay(entity);
     const now = Date.now();
     const cancelAtPeriodEnd = state.status === 'cancelled' || stored.cancelAtPeriodEnd;
+    // A cancelled subscription keeps access until the end of what was paid for (trial end or month end):
+    // never shorten the period on cancellation.
+    // An admin "expire now" (accessRevokedAt) caps the period for good.
+    const currentPeriodEnd = capPeriodEnd(
+      state.status === 'cancelled'
+        ? Math.max(state.currentPeriodEnd ?? 0, stored.currentPeriodEnd ?? 0) || null
+        : (state.currentPeriodEnd ?? stored.currentPeriodEnd),
+      stored.accessRevokedAt,
+    );
     const nextSub: SubscriptionDoc = {
       ...stored,
       ...state,
+      razorpayCustomerId: state.razorpayCustomerId ?? stored.razorpayCustomerId,
+      startAt: state.startAt ?? stored.startAt,
+      currentPeriodEnd,
+      totalCount: state.totalCount || stored.totalCount,
+      subscriptionActivatedAt: activationTimeFor(stored.subscriptionActivatedAt ?? null, state.status, state.currentPeriodStart, now),
       cancelAtPeriodEnd,
       cancelledAt: state.status === 'cancelled' ? (stored.cancelledAt ?? now) : stored.cancelledAt,
-      lastEvent: { name: eventName, receivedAt: now },
+      lastEvent: { name: source.event, receivedAt: now },
       updatedAt: now,
     };
     tx.set(subRef, nextSub);
+    if (stored.status !== nextSub.status || source.razorpayEventId) {
+      tx.create(refs.subscriptionEvents(entity.id).doc(), {
+        event: source.event,
+        fromStatus: stored.status,
+        toStatus: nextSub.status,
+        razorpayEventId: source.razorpayEventId ?? null,
+        receivedAt: now,
+      });
+    }
 
     const entitlement: StoredEntitlement = {
       status: nextSub.status,
@@ -46,6 +78,7 @@ export const syncSubscription = async (entity: RazorpaySubscriptionEntity, event
       planName: stored.planSnapshot.name,
       currentPeriodEnd: nextSub.currentPeriodEnd,
       cancelAtPeriodEnd,
+      source: 'razorpay',
     };
     // Don't let an old/other subscription overwrite a newer active one.
     const current = user.entitlement?.subscriptionId;
@@ -60,42 +93,63 @@ export const markCancelAtPeriodEnd = (userId: string, subscriptionId: string) =>
   db.runTransaction(async (tx) => {
     const userRef = refs.user(userId);
     const subRef = refs.subscriptions().doc(subscriptionId);
-    const [user, sub] = [(await tx.get(userRef)).data(), (await tx.get(subRef)).data()];
+    const user = (await tx.get(userRef)).data();
+    const sub = (await tx.get(subRef)).data();
     const now = Date.now();
-    if (sub) tx.set(subRef, { ...sub, cancelAtPeriodEnd: true, cancelledAt: sub.cancelledAt ?? now, updatedAt: now });
+    if (sub) {
+      tx.set(subRef, { ...sub, cancelAtPeriodEnd: true, cancelledAt: sub.cancelledAt ?? now, updatedAt: now });
+      tx.create(refs.subscriptionEvents(subscriptionId).doc(), {
+        event: 'user.cancel_requested',
+        fromStatus: sub.status,
+        toStatus: sub.status,
+        razorpayEventId: null,
+        receivedAt: now,
+      });
+    }
     if (user?.entitlement) {
       tx.set(userRef, usersRepo.entitlementWrite({ ...user.entitlement, cancelAtPeriodEnd: true }), { merge: true });
     }
   });
 
-type RazorpayPaymentEntity = {
-  id: string;
-  amount: number;
-  currency: string;
-  status: string;
-  method?: string;
-  invoice_id?: string | null;
-  created_at?: number;
+/** Finds the Razorpay subscription a payment belongs to (direct field, else via its invoice). */
+export const resolveSubscriptionId = async (payment: RazorpayPaymentLike & { subscription_id?: string | null }, hint?: string | null) => {
+  if (hint) return hint;
+  if (payment.subscription_id) return payment.subscription_id;
+  if (payment.invoice_id) {
+    try {
+      return await subscriptionIdForInvoice(payment.invoice_id);
+    } catch (error) {
+      logger.warn('Could not resolve invoice → subscription', { invoiceId: payment.invoice_id, error });
+    }
+  }
+  return null;
 };
 
-/** Writes the payments ledger from subscription.charged / payment.* webhooks. */
-export const recordPayment = async (payment: RazorpayPaymentEntity, subscriptionId: string, eventName: string) => {
-  const sub = (await refs.subscriptions().doc(subscriptionId).get()).data();
-  if (!sub) {
-    logger.warn('Payment for unknown subscription', { paymentId: payment.id, subscriptionId });
-    return;
-  }
-  const isTrial = sub.planSnapshot.trialDays > 0 && payment.amount === sub.planSnapshot.trialPriceInPaise && sub.status !== 'active';
-  await paymentsRepo.upsert(payment.id, {
-    userId: sub.userId,
-    subscriptionId,
-    planId: sub.planId,
-    amountInPaise: payment.amount,
-    currency: payment.currency,
-    status: payment.status === 'captured' ? 'captured' : payment.status === 'refunded' ? 'refunded' : payment.status === 'failed' ? 'failed' : 'authorized',
-    method: payment.method ?? null,
-    kind: isTrial ? 'trial' : eventName === 'subscription.charged' && sub.currentPeriodStart ? 'renewal' : 'first_charge',
-    invoiceId: payment.invoice_id ?? null,
-    paidAt: payment.created_at ? payment.created_at * 1000 : Date.now(),
+/**
+ * Upserts transactions/{razorpayPaymentId} for a subscription payment. Idempotent and order-safe:
+ * keyed by the payment id, and statuses never move backwards.
+ */
+export const recordTransaction = async (payment: RazorpayPaymentLike, subscriptionId: string) => {
+  const subRef = refs.subscriptions().doc(subscriptionId);
+  const txRef = refs.transactions().doc(payment.id);
+  await db.runTransaction(async (tx) => {
+    const sub = (await tx.get(subRef)).data();
+    if (!sub) {
+      logger.warn('Payment for a subscription Ankveda does not know', { paymentId: payment.id, subscriptionId });
+      return;
+    }
+    const existing = (await tx.get(txRef)).data() ?? null;
+    const firstCharges = await tx.get(
+      refs.transactions().where('subscriptionId', '==', subscriptionId).where('kind', '==', 'first_charge').where('status', '==', 'captured').limit(2),
+    );
+    const hasCapturedFirstCharge = firstCharges.docs.some((d) => d.id !== payment.id);
+    const now = Date.now();
+    const data = mergeTransaction(existing, payment, {
+      userId: sub.userId,
+      subscriptionId,
+      planId: sub.planId,
+      kind: transactionKindOf(payment, sub, hasCapturedFirstCharge),
+    });
+    tx.set(txRef, { ...data, schemaVersion: SCHEMA_VERSION, createdAt: existing?.createdAt ?? now, updatedAt: now });
   });
 };

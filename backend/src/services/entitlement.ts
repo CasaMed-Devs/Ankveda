@@ -34,29 +34,3 @@ export const publicUser = (userId: string, user: UserDoc) => ({
   dob: user.profile?.dob || undefined,
   entitlement: computeEntitlement(user.entitlement),
 });
-
-type RazorpaySubscriptionLike = {
-  id: string;
-  status: string;
-  current_start?: number | null;
-  current_end?: number | null;
-  start_at?: number | null;
-  charge_at?: number | null;
-  ended_at?: number | null;
-};
-
-const sec = (value: number | null | undefined) => (value ? value * 1000 : null);
-
-/** Fields of subscriptions/{id} derived from a Razorpay subscription entity. */
-export const subscriptionStateFromRazorpay = (sub: RazorpaySubscriptionLike) => {
-  const status = (sub.status as SubscriptionStatus) ?? 'created';
-  // During a trial the subscription is "authenticated" and the first charge happens at start_at.
-  const periodEnd = sec(sub.current_end) ?? (status === 'authenticated' ? sec(sub.start_at ?? sub.charge_at) : null) ?? sec(sub.ended_at);
-  return {
-    status,
-    startAt: sec(sub.start_at),
-    currentPeriodStart: sec(sub.current_start),
-    currentPeriodEnd: periodEnd,
-    endedAt: sec(sub.ended_at),
-  };
-};

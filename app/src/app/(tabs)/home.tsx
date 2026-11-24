@@ -21,7 +21,7 @@ export default function Home() {
 
   return (
     <Screen withTabBar>
-      <Heading eyebrow="Your daily companion" title={name ? `Namaste, ${name}` : 'Namaste'} />
+      <Heading eyebrow="Your daily companion" title={name ? `Namaste, ${name}` : 'Namaste'} gap={16} />
 
       <View style={styles.birthCardWrap}>
         {home.isLoading ? (
@@ -41,7 +41,9 @@ export default function Home() {
                 </AppText>
               </View>
             </View>
-            <AppText style={styles.birthNumber}>{home.data.birthNumber}</AppText>
+            <AppText style={styles.birthNumber} allowFontScaling={false}>
+              {home.data.birthNumber}
+            </AppText>
           </Card>
         ) : home.isError ? (
           <Card style={styles.birthCard} onPress={() => void home.refetch()}>
@@ -66,7 +68,7 @@ export default function Home() {
       </View>
 
       {latest ? (
-        <View style={styles.section}>
+        <View style={[styles.section, styles.firstSection]}>
           <AppText variant="title">Your reports</AppText>
           <ArrowCard
             title={reportTitle(latest)}
@@ -76,7 +78,7 @@ export default function Home() {
         </View>
       ) : null}
 
-      <View style={styles.section}>
+      <View style={[styles.section, !latest && styles.firstSection]}>
         <AppText variant="title" style={{ fontSize: 28 }}>
           Explore your numbers
         </AppText>
@@ -91,7 +93,7 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  birthCardWrap: { marginTop: 32 },
+  birthCardWrap: { marginTop: 28 },
   birthCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -105,7 +107,7 @@ const styles = StyleSheet.create({
   birthCopy: { gap: 16 },
   birthMessage: { fontSize: 13, lineHeight: 19 },
   birthNumber: {
-    width: 70,
+    minWidth: 70,
     fontFamily: fonts.serifMedium,
     fontSize: 104,
     lineHeight: 110,
@@ -113,4 +115,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   section: { marginTop: 24, gap: 16 },
+  firstSection: { marginTop: 48 },
 });

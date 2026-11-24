@@ -2,12 +2,11 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { InfoCard } from '@/components/Cards';
 import { DateField, TextField } from '@/components/Fields';
 import { Heading } from '@/components/Heading';
-import { Screen } from '@/components/Screen';
+import { FooterNote, Screen } from '@/components/Screen';
 import { ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { useUpdateMe } from '@/lib/queries';
@@ -38,13 +37,13 @@ export default function AboutYou() {
       footer={
         <>
           {update.error ? (
-            <AppText variant="small" align="center" color={colors.danger}>
+            <FooterNote color={colors.danger}>
               {update.error instanceof ApiError ? update.error.message : 'Could not save. Please try again.'}
-            </AppText>
+            </FooterNote>
           ) : (
-            <AppText variant="small" align="center">
+            <FooterNote>
               Your details stay private and secure.
-            </AppText>
+            </FooterNote>
           )}
           <PrimaryButton label="Continue" onPress={submit} loading={update.isPending} />
         </>

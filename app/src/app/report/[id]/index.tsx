@@ -83,13 +83,17 @@ export default function ReportResult() {
               {`${content.primary.label} · ${content.primary.calculation}`}
             </AppText>
           </View>
-          <AppText style={styles.bigNumber}>{content.primary.value}</AppText>
+          <AppText style={styles.bigNumber} allowFontScaling={false}>
+            {content.primary.value}
+          </AppText>
         </Card>
 
         <View style={styles.numbers}>
           {content.numbers.slice(0, 3).map((n) => (
             <Card key={n.label} style={styles.numberCard}>
-              <AppText style={styles.numberValue}>{n.value}</AppText>
+              <AppText style={styles.numberValue} allowFontScaling={false}>
+                {n.value}
+              </AppText>
               <AppText style={styles.numberLabel}>{n.label.toUpperCase()}</AppText>
             </Card>
           ))}

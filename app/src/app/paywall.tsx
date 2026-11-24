@@ -179,7 +179,7 @@ const styles = StyleSheet.create({
   benefit: { flexDirection: 'row', gap: 12 },
   benefitIndex: { width: 30, fontSize: 13 },
   benefitText: { flex: 1, gap: 6 },
-  plan: { marginTop: 40 },
+  plan: { marginTop: 'auto', paddingTop: 40 },
   noPlan: { padding: 18 },
   membership: { marginTop: 40, padding: 18, gap: 8 },
   fineprint: { fontSize: 9, lineHeight: 13 },
