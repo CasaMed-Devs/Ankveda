@@ -11,3 +11,4 @@ service-account*.json
 
 .vercel
 .env*
+!.env.example
