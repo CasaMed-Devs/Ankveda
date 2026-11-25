@@ -1,11 +1,12 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { LinkButton, PrimaryButton } from '@/components/Buttons';
 import { Card } from '@/components/Cards';
 import { Heading } from '@/components/Heading';
+import { Loader } from '@/components/Loader';
 import { PlanCard } from '@/components/PlanCard';
 import { Screen } from '@/components/Screen';
 import { usePremiumCheckout } from '@/hooks/usePremiumCheckout';
@@ -20,7 +21,7 @@ import { borderWidth, colors, radii } from '@/theme/tokens';
 const BENEFITS = [
   { title: 'Every numerology report', body: 'Name, phone, birth date, compatibility, career, future & car' },
   { title: 'Guidance, every day', body: 'Personal numbers, dates and remedies' },
-  { title: 'Your personal astrologer', body: 'Ask anything about your numbers in Chat' },
+  { title: 'Your personal astrologer', body: 'Chat 1:1 with expert astrologers, anytime' },
 ];
 
 const goBack = () => (router.canGoBack() ? router.back() : router.replace('/home'));
@@ -49,7 +50,7 @@ export default function Paywall() {
     }
   };
 
-  if (isPremium && entitlement) return <MembershipView />;
+  if (isPremium && entitlement) return <MembershipView reportId={reportId} />;
 
   const copy = plan.data ? describePlan(plan.data) : null;
 
@@ -97,7 +98,7 @@ export default function Paywall() {
 
       <View style={styles.plan}>
         {plan.isLoading ? (
-          <ActivityIndicator color={colors.gold} />
+          <Loader size="sm" />
         ) : plan.data ? (
           <PlanCard plan={plan.data} />
         ) : (
@@ -113,9 +114,13 @@ export default function Paywall() {
 }
 
 /** Shown on the same route when the user already has Premium (Profile → Ankveda Premium). */
-const MembershipView = () => {
+const MembershipView = ({ reportId }: { reportId?: string }) => {
   const { entitlement } = useEntitlement();
+  const plan = useFeaturedPlan();
+  const { checkout, busy } = usePremiumCheckout(reportId);
   const [cancelling, setCancelling] = useState(false);
+  // Renewal cancelled but days left: the user may start a new subscription now (no trial the second time).
+  const resubscribe = entitlement?.cancelAtPeriodEnd && plan.data ? describePlan(plan.data) : null;
   const endDate = entitlement?.currentPeriodEnd ? new Date(entitlement.currentPeriodEnd).toLocaleDateString('en-IN') : '';
 
   const cancel = () =>
@@ -146,7 +151,10 @@ const MembershipView = () => {
     <Screen
       footer={
         <>
-          <PrimaryButton label="Continue" onPress={goBack} />
+          {resubscribe && plan.data ? (
+            <PrimaryButton label={resubscribe.cta} onPress={() => void checkout(plan.data!)} loading={busy} />
+          ) : null}
+          <PrimaryButton label="Continue" tone={resubscribe ? 'card' : 'gradient'} onPress={goBack} />
           {!entitlement?.cancelAtPeriodEnd ? (
             <LinkButton label={cancelling ? 'Cancelling…' : 'Cancel auto-renewal'} onPress={cancel} />
           ) : null}

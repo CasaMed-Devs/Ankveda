@@ -29,7 +29,9 @@ const FieldShell = ({ label, error, hint, children }: FieldShellProps) => (
   </View>
 );
 
-type TextFieldProps = Omit<TextInputProps, 'style'> & { label: string; error?: string; hint?: string };
+type InputRef = React.Ref<ComponentRef<typeof TextInput>>;
+
+type TextFieldProps = Omit<TextInputProps, 'style'> & { label: string; error?: string; hint?: string; ref?: InputRef };
 
 export const TextField = ({ label, error, hint, ...input }: TextFieldProps) => (
   <FieldShell label={label} error={error} hint={hint}>
@@ -87,10 +89,11 @@ type DateFieldProps = {
   value: string;
   onChange: (isoDate: string) => void;
   error?: string;
-};
+  ref?: InputRef;
+} & Pick<TextInputProps, 'onFocus' | 'onBlur' | 'onSubmitEditing' | 'returnKeyType'>;
 
 /** DD / MM / YYYY masked input. */
-export const DateField = ({ label, value, onChange, error }: DateFieldProps) => {
+export const DateField = ({ label, value, onChange, error, ref, ...inputEvents }: DateFieldProps) => {
   const [digits, setDigits] = useState(() => isoDateToDigits(value));
   const [prevValue, setPrevValue] = useState(value);
 
@@ -110,6 +113,8 @@ export const DateField = ({ label, value, onChange, error }: DateFieldProps) => 
     <FieldShell label={label} error={error}>
       <View style={[styles.box, error && styles.boxError]}>
         <Input
+          ref={ref}
+          {...inputEvents}
           value={maskDate(digits)}
           onChangeText={handleChange}
           keyboardType="number-pad"

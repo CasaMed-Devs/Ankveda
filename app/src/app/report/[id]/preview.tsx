@@ -1,12 +1,13 @@
 import { BlurTargetView, BlurView } from 'expo-blur';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useRef, type ComponentRef } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { LinkButton, PrimaryButton } from '@/components/Buttons';
 import { Card } from '@/components/Cards';
 import { Heading } from '@/components/Heading';
+import { Loader } from '@/components/Loader';
 import { LockBadge } from '@/components/LockedPanel';
 import { Screen } from '@/components/Screen';
 import { usePremiumCheckout } from '@/hooks/usePremiumCheckout';
@@ -51,7 +52,7 @@ export default function LockedPreview() {
       />
 
       {report.isLoading ? (
-        <ActivityIndicator color={colors.gold} style={{ marginTop: 40 }} />
+        <Loader size="md" style={{ marginTop: 24 }} />
       ) : (
         <View style={styles.body}>
           <AppText variant="cardTitle" color={colors.gold} style={styles.typeTitle}>

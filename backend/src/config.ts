@@ -64,8 +64,13 @@ export const config = {
       apiKey,
       userId: env('ASTROLOGY_API_USER_ID'),
       baseUrl: env('ASTROLOGY_API_BASE_URL') ?? 'https://json.astrologyapi.com/v1',
-      chatUrl: env('ASTROLOGY_CHAT_URL') ?? 'https://json-chat.astrologyapi.com/api/chat',
     };
+  },
+  /** Persona API — astrologer personas for chat. It stores the chat history; the key is server-only. */
+  get persona() {
+    const apiKey = env('PERSONA_API_KEY');
+    if (!apiKey) return null;
+    return { apiKey, baseUrl: (env('PERSONA_API_BASE_URL') ?? 'https://personaapi.web.app').replace(/\/+$/, '') };
   },
   get razorpay() {
     const keyId = env('RAZORPAY_KEY_ID');

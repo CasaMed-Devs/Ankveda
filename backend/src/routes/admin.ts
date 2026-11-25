@@ -183,15 +183,25 @@ adminRouter.post(
   }),
 );
 
-/** Permanent deletion. The body must repeat the user id (typed confirmation in the dashboard). */
+/**
+ * Permanent deletion. `confirm` must repeat the user id (typed confirmation in the dashboard). It is read
+ * from the body or the query string — some proxies drop DELETE bodies. `force` deletes even when Razorpay
+ * billing can't be confirmed stopped.
+ */
 adminRouter.delete(
   '/admin/users/:id',
   handle(async (req, res) => {
     const id = String(req.params.id);
-    const { confirm } = parseBody(z.object({ confirm: z.string() }), req.body);
+    const body = req.body && typeof req.body === 'object' && Object.keys(req.body).length ? req.body : req.query;
+    const { confirm, force } = parseBody(
+      z.object({ confirm: z.string(), force: z.union([z.boolean(), z.enum(['true', 'false'])]).optional() }),
+      body,
+    );
     if (confirm !== id) throw new HttpError(400, 'Confirmation does not match the user id.', 'validation');
-    const job = await deleteUser(id, actorOf(req));
-    res.json({ deletion: { status: job.status, deleted: job.deleted, completedAt: job.completedAt } });
+    const job = await deleteUser(id, actorOf(req), { force: force === true || force === 'true' });
+    res.json({
+      deletion: { status: job.status, deleted: job.deleted, completedAt: job.completedAt, billingNotStopped: job.billingNotStopped ?? [] },
+    });
   }),
 );
 

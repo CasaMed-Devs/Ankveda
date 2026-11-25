@@ -5,7 +5,7 @@ import { getAuth } from 'firebase-admin/auth';
 import jwt from 'jsonwebtoken';
 
 import { config } from '../config';
-import { firebaseApp } from '../db/firestore';
+import { firebaseApp, refs } from '../db/firestore';
 import type { AdminActor } from '../types';
 import { HttpError } from './http';
 import { logger } from './logger';
@@ -39,12 +39,37 @@ const verify = (token: string) => {
   }
 };
 
-export const requireUser = (req: Request, _res: Response, next: NextFunction) => {
+/**
+ * Accounts seen to exist recently (per instance), so most requests skip the extra read. A deleted
+ * account (from the app, or permanently by an admin) is rejected within USER_CHECK_TTL_MS.
+ */
+const USER_CHECK_TTL_MS = 30_000;
+const existingUsers = new Map<string, number>();
+
+const accountExists = async (uid: string) => {
+  const checkedAt = existingUsers.get(uid);
+  if (checkedAt && Date.now() - checkedAt < USER_CHECK_TTL_MS) return true;
+  const exists = (await refs.user(uid).get()).exists;
+  if (existingUsers.size > 5000) existingUsers.clear();
+  if (exists) existingUsers.set(uid, Date.now());
+  else existingUsers.delete(uid);
+  return exists;
+};
+
+/** Forget a deleted account immediately on this instance (other instances catch up within the TTL). */
+export const forgetUser = (uid: string) => existingUsers.delete(uid);
+
+export const requireUser = async (req: Request, _res: Response, next: NextFunction) => {
   const token = bearer(req);
   if (!token) return next(new HttpError(401, 'Please sign in to continue.', 'unauthorized'));
   try {
     const claims = verify(token);
     if (claims.role !== 'user') throw new HttpError(403, 'Not allowed', 'forbidden');
+    // The token outlives the account: a deleted account's session must not keep reading or writing data
+    // (a merge-write would otherwise silently recreate users/{id}).
+    if (!(await accountExists(claims.sub))) {
+      throw new HttpError(401, 'This account no longer exists. Please sign in again.', 'unauthorized');
+    }
     req.uid = claims.sub;
     next();
   } catch (e) {

@@ -3,8 +3,11 @@ import { router } from 'expo-router';
 import { useAuthStore } from '@/lib/auth-store';
 import { API_URL } from '@/lib/config';
 import type {
+  Astrologer,
   ChatMessage,
+  ChatPage,
   CheckoutSession,
+  ConversationSummary,
   Daily,
   HomeSummary,
   Invoice,
@@ -63,7 +66,7 @@ export const api = {
     request<{ token: string; user: User }>('POST', '/auth/otp/verify', { phone, code }),
 
   me: () => request<{ user: User }>('GET', '/me'),
-  updateMe: (patch: { fullName?: string; dob?: string }) => request<{ user: User }>('PUT', '/me', patch),
+  updateMe: (patch: { fullName?: string; dob?: string; birthTime?: string; birthPlace?: string }) => request<{ user: User }>('PUT', '/me', patch),
   /** Deletes the account from the app (data kept server-side); a running subscription is cancelled. */
   deleteAccount: () => request<{ deleted: true; billingCancelled: number }>('DELETE', '/me'),
 
@@ -85,6 +88,15 @@ export const api = {
 
   invoices: () => request<{ invoices: Invoice[] }>('GET', '/invoices'),
 
-  chatHistory: () => request<{ locked: boolean; messages: ChatMessage[] }>('GET', '/chat/history'),
-  sendChat: (text: string) => request<{ messages: ChatMessage[] }>('POST', '/chat', { text }),
+  astrologers: () => request<{ astrologers: Astrologer[] }>('GET', '/astrologers'),
+  conversations: () => request<{ conversations: ConversationSummary[] }>('GET', '/chat/conversations'),
+  chatMessages: (astrologerId: string, before?: number) =>
+    request<ChatPage>(
+      'GET',
+      `/chat/${encodeURIComponent(astrologerId)}/messages${before !== undefined ? `?before=${before}` : ''}`,
+    ),
+  saveChatContext: (astrologerId: string, values: Record<string, string>) =>
+    request<{ missing: string[] }>('PUT', `/chat/${encodeURIComponent(astrologerId)}/context`, { values }),
+  sendChat: (astrologerId: string, text: string) =>
+    request<{ messages: ChatMessage[] }>('POST', `/chat/${encodeURIComponent(astrologerId)}`, { text }),
 };

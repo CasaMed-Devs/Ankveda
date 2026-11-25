@@ -1,10 +1,11 @@
 import { router } from 'expo-router';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { ArrowCard, Badge, Card } from '@/components/Cards';
 import { Heading } from '@/components/Heading';
+import { Loader } from '@/components/Loader';
 import { Screen } from '@/components/Screen';
 import { useReports } from '@/lib/queries';
 import { reportStatusLine, reportTitle } from '@/lib/report-status';
@@ -37,7 +38,7 @@ export default function Reports() {
 
       <View style={styles.list}>
         {reports.isLoading ? (
-          <ActivityIndicator color={colors.gold} style={styles.loader} />
+          <Loader size="md" style={styles.loader} />
         ) : reports.isError ? (
           <Pressable onPress={() => void reports.refetch()}>
             <AppText variant="small">We could not load your reports. Tap to try again.</AppText>
@@ -88,7 +89,7 @@ export default function Reports() {
 
 const styles = StyleSheet.create({
   list: { marginTop: 40, gap: 16 },
-  loader: { marginVertical: 40 },
+  loader: { marginVertical: 20 },
   featured: { paddingTop: 20, paddingBottom: 30, paddingHorizontal: 18, gap: 30, marginBottom: 16 },
   featuredTop: { gap: 16 },
   featuredTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },

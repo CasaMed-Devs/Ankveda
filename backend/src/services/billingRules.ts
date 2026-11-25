@@ -195,3 +195,64 @@ export const accessBucketOf = (entitlement: StoredEntitlement | null | undefined
   if (entitlement.status === 'authenticated') return 'trial';
   return 'paid';
 };
+
+// ── Checkout & re-subscribe rules ───────────────────────────────────────────────
+
+/**
+ * May this user open a new checkout?
+ *  - no access, or access that is ending (cancelled renewal) on a Razorpay subscription → yes
+ *  - active and renewing, or complimentary (admin grant) access → no
+ */
+export const canStartCheckout = (entitlement: StoredEntitlement | null | undefined, now = Date.now()): boolean => {
+  if (!computeEntitlement(entitlement, now).active) return true;
+  if (entitlement?.source === 'admin_grant') return false;
+  return entitlement?.status === 'cancelled' || !!entitlement?.cancelAtPeriodEnd;
+};
+
+/** The trial is offered once per account: never again after it has been used. */
+export const trialAllowed = (terms: Pick<PlanTerms, 'trialDays'>, trialUsedAt: number | null | undefined): boolean =>
+  terms.trialDays > 0 && !trialUsedAt;
+
+/** Terms for this checkout: the plan's terms, without the trial when the user is not eligible. */
+export const checkoutTerms = (terms: PlanTerms, withTrial: boolean): PlanTerms =>
+  withTrial ? terms : { ...terms, trialDays: 0, trialPriceInPaise: 0 };
+
+/** How long an unpaid checkout may be reopened. Trial checkouts are short: Razorpay fixes start_at at creation. */
+export const REUSE_TRIAL_CHECKOUT_MS = 30 * 60_000;
+export const REUSE_CHECKOUT_MS = 24 * 60 * 60_000;
+
+/** Can this unpaid checkout be reopened instead of creating a new Razorpay subscription? */
+export const reusablePendingCheckout = (
+  pending: { status: SubscriptionStatus; planId: string; createdAt: number; planSnapshot: Pick<PlanTerms, 'trialDays'>; source?: string } | null | undefined,
+  want: { planId: string; withTrial: boolean },
+  now = Date.now(),
+): boolean => {
+  if (!pending || pending.status !== 'created' || pending.source === 'admin_grant') return false;
+  if (pending.planId !== want.planId) return false;
+  if (pending.planSnapshot.trialDays > 0 !== want.withTrial) return false;
+  const window = want.withTrial ? REUSE_TRIAL_CHECKOUT_MS : REUSE_CHECKOUT_MS;
+  return now - pending.createdAt < window;
+};
+
+const GRANTS_ACCESS: SubscriptionStatus[] = ['authenticated', 'active'];
+
+/**
+ * Should users/{id}.entitlement point at the incoming subscription?
+ * Yes when there is none, it is the same one, the current one no longer gives access, or the incoming one
+ * is the user's latest checkout and now gives access (a re-purchase replaces a cancelled-but-running one).
+ * Late webhooks from an older subscription never take over a newer one.
+ */
+export const shouldReplaceEntitlement = (
+  args: {
+    current: StoredEntitlement | null | undefined;
+    incomingId: string;
+    incomingStatus: SubscriptionStatus;
+    latestSubscriptionId: string | null | undefined;
+  },
+  now = Date.now(),
+): boolean => {
+  const currentId = args.current?.subscriptionId;
+  if (!currentId || currentId === args.incomingId) return true;
+  if (!computeEntitlement(args.current, now).active) return true;
+  return args.latestSubscriptionId === args.incomingId && GRANTS_ACCESS.includes(args.incomingStatus);
+};

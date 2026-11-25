@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { InlineAlert } from '@/components/ui/Feedback';
 import { Field, Input, Select, Textarea } from '@/components/ui/Form';
 import { Modal, useToast } from '@/components/ui/Overlay';
-import { errorMessage } from '@/lib/api';
+import { ApiError, errorMessage } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { addDays, date, istKey, phone, rupees } from '@/lib/format';
 import { useDeleteUser, useExpire, useGrant, usePlans } from '@/lib/queries';
@@ -299,19 +299,26 @@ export const DeleteUserModal = ({ user, open, onClose, onDeleted }: { user: Acti
   const del = useDeleteUser();
   const toast = useToast();
   const [confirm, setConfirm] = useState('');
+  const [force, setForce] = useState(false);
   useEffect(() => {
     if (!open) return;
     del.reset();
     setConfirm('');
+    setForce(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   const done = del.data?.deletion.status === 'completed';
   const summary = useMemo(() => del.data?.deletion.deleted, [del.data]);
+  const skippedBilling = del.data?.deletion.billingNotStopped ?? [];
+  // Razorpay billing couldn't be confirmed stopped — the admin may choose to delete anyway.
+  const billingBlocked = del.error instanceof ApiError && del.error.code === 'billing_not_stopped';
 
   const submit = () =>
-    del.mutate(user.id, {
-      onSuccess: () => {
-        toast.success('User permanently deleted');
+    del.mutate({ userId: user.id, force: billingBlocked && force }, {
+      onSuccess: (data) => {
+        const skipped = data.deletion.billingNotStopped ?? [];
+        if (skipped.length) toast.error('User deleted — Razorpay billing not stopped', `Cancel ${skipped.join(', ')} in the Razorpay dashboard.`);
+        else toast.success('User permanently deleted');
         onDeleted?.();
       },
     });
@@ -330,8 +337,14 @@ export const DeleteUserModal = ({ user, open, onClose, onDeleted }: { user: Acti
         ) : (
           <>
             <Button onClick={onClose}>Cancel</Button>
-            <Button variant="danger" icon={Trash} onClick={submit} loading={del.isPending} disabled={confirm !== 'DELETE'}>
-              {del.error ? 'Retry deletion' : 'Delete permanently'}
+            <Button
+              variant="danger"
+              icon={Trash}
+              onClick={submit}
+              loading={del.isPending}
+              disabled={confirm !== 'DELETE' || (billingBlocked && !force)}
+            >
+              {billingBlocked ? 'Delete anyway' : del.error ? 'Retry deletion' : 'Delete permanently'}
             </Button>
           </>
         )
@@ -346,6 +359,12 @@ export const DeleteUserModal = ({ user, open, onClose, onDeleted }: { user: Acti
               Deleted {summary.subscriptions} subscription(s) and {summary.transactions} payment record(s) ({rupees(summary.paymentsInPaise)} of revenue). The audit log keeps only these
               counts.
             </p>
+          )}
+          {skippedBilling.length > 0 && (
+            <InlineAlert tone="danger">
+              Razorpay billing was not confirmed stopped for {skippedBilling.map((id) => <code key={id} className="text-[12px]">{id} </code>)}— cancel
+              {skippedBilling.length > 1 ? ' them' : ' it'} in the Razorpay dashboard.
+            </InlineAlert>
           )}
         </div>
       ) : (
@@ -363,7 +382,7 @@ export const DeleteUserModal = ({ user, open, onClose, onDeleted }: { user: Acti
           <InlineAlert tone="danger">
             <p className="font-semibold">This cannot be undone.</p>
             <ul className="mt-1 list-disc pl-4">
-              <li>Any active Razorpay subscription is cancelled first — if billing can’t be stopped, nothing is deleted.</li>
+              <li>Any active Razorpay subscription is cancelled first — if billing can’t be stopped, nothing is deleted unless you choose to delete anyway.</li>
               <li>Deletes the profile, reports, chat history, daily guidance, login code, subscriptions and payment records.</li>
               <li>Their payments disappear from revenue figures. The Razorpay dashboard keeps its own records.</li>
               <li>If a step fails, retrying resumes where it stopped.</li>
@@ -373,6 +392,15 @@ export const DeleteUserModal = ({ user, open, onClose, onDeleted }: { user: Acti
             <Input id="confirm-delete" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" spellCheck={false} />
           </Field>
           {del.error && <InlineAlert tone="danger">{errorMessage(del.error)}</InlineAlert>}
+          {billingBlocked && (
+            <label className="flex items-start gap-2 text-[13px] text-ink-2">
+              <input type="checkbox" className="mt-0.5" checked={force} onChange={(e) => setForce(e.target.checked)} />
+              <span>
+                Delete anyway. I have cancelled (or will cancel) this subscription in the Razorpay dashboard — the subscription id is kept in the
+                audit log.
+              </span>
+            </label>
+          )}
         </div>
       )}
     </Modal>

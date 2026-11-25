@@ -10,10 +10,12 @@
  * Collections
  *   users/{userId}                               userId = u_ + sha256("+91"+phone)[:24]
  *   users/{userId}/reports/{reportId}            → user (parent)
- *   users/{userId}/chatMessages/{messageId}      → user (parent)
+ *   users/{userId}/chatMessages/{messageId}      → user (parent)   legacy; chat history now lives in Persona API
  *   users/{userId}/dailyGuidance/{YYYY-MM-DD}    → user (parent), TTL expireAt
  *   plans/{planId}                               never hard-deleted (subscriptions reference it)
- *   subscriptions/{razorpaySubscriptionId}       → users.userId, → plans.planId   (users.entitlement.subscriptionId → here)
+ *   subscriptions/{razorpaySubscriptionId}       → users.userId, → plans.planId
+ *                                                ← users.entitlement.subscriptionId (current access),
+ *                                                ← users.latestSubscriptionId / users.subscriptionIds[] (every checkout)
  *   subscriptions/{id}/events/{auto}             append-only status history
  *   transactions/{razorpayPaymentId}             → subscriptions (subscriptionId), → users, → plans
  *   otpChallenges/{phone}                        TTL expireAt
@@ -40,6 +42,9 @@ export type UserProfile = {
   dob: string;
   /** Derived Chaldean numbers, recomputed whenever the profile changes. */
   numbers: ProfileNumbers;
+  /** Birth time "HH:mm" (24 h) and place, asked for in chat by astrologers who need them. */
+  birthTime?: string | null;
+  birthPlace?: string | null;
 };
 
 export type SubscriptionStatus =
@@ -82,8 +87,22 @@ export type UserDoc = Audited & {
   nameLower?: string | null;
   profileCompletedAt: number | null;
   entitlement: StoredEntitlement | null;
-  /** astrologyapi.com chat session, tied to the birth details it was started with. */
+  /**
+   * Most recent subscription created for this user — written when checkout opens, so it is set even if
+   * the Razorpay checkout is closed without paying. → subscriptions/{id}. Missing on older documents.
+   */
+  latestSubscriptionId?: string | null;
+  /** Every subscription ever created for this user, oldest first (arrayUnion). → subscriptions/{id} */
+  subscriptionIds?: string[];
+  /** When this account first used the trial. Set ⇒ later purchases have no trial. */
+  trialUsedAt?: number | null;
+  /** Legacy astrologyapi.com chat session (chat now runs on Persona API). */
   chat: { astroSessionId: string | null; profileKey: string | null } | null;
+  /**
+   * Extra details a Persona astrologer asked for (partner's birth details, "kaam", "sheher", …),
+   * keyed by Persona profile id. Birth time / place live on the profile instead (shared by all astrologers).
+   */
+  chatContext?: Record<string, Record<string, string>>;
   lastLoginAt: number;
 };
 
@@ -156,6 +175,7 @@ export type ReportDoc = Audited & {
 
 // ── Chat & daily ─────────────────────────────────────────────────────────────
 
+/** Legacy (astrologyapi / OpenAI chat, before Persona API). */
 export type ChatProvider = 'astrologyapi' | 'openai' | 'template';
 
 export type ChatMessageDoc = {
@@ -177,7 +197,14 @@ export type Daily = {
 
 export type DailyDoc = Daily & {
   schemaVersion: number;
-  /** "name|dob" the guidance was written for; a profile edit invalidates it. */
+  /**
+   * "generating" while one request builds today's report (others wait); "ready" once saved.
+   * Missing on docs written before the claim lock existed → treated as ready.
+   */
+  status?: 'generating' | 'ready';
+  /** Claim lease while generating (ms epoch); null once ready. */
+  lockedUntil?: number | null;
+  /** "name|dob" the guidance was written for (reference only — one report per day regardless). */
   profileKey: string;
   createdAt: number;
   expireAt: number;
@@ -259,6 +286,10 @@ export type SubscriptionDoc = Audited & {
   accessRevokedAt?: number | null;
   /** Last admin action on this subscription (expire / cancel renewal). */
   adminAction?: { type: AdminExpireMode; by: AdminActor; notes: string | null; performedAt: number } | null;
+  /** Re-purchase chain: the newer subscription that took over this one's access … */
+  replacedBySubscriptionId?: string | null;
+  /** … and, on the newer one, the subscription it took over from. */
+  replacesSubscriptionId?: string | null;
 };
 
 /**
@@ -411,6 +442,8 @@ export type UserDeletionDoc = {
   /** Kept for the phone-keyed OTP record; cleared once the job completes. */
   phone: string | null;
   deleted: { subscriptions: number; transactions: number; paymentsInPaise: number };
+  /** Razorpay subscription ids that could not be cancelled; the admin forced the deletion past them. */
+  billingNotStopped?: string[];
   lastError: string | null;
   createdAt: number;
   updatedAt: number;
@@ -436,4 +469,27 @@ export type ChatMessage = {
   role: 'user' | 'astrologer';
   text: string;
   createdAt: number;
+};
+
+export type RequiredInput = { key: string; label: string; example?: string; required: boolean };
+
+/** A chat astrologer (Persona API profile). */
+export type Astrologer = {
+  id: string;
+  name: string;
+  speciality: string;
+  about: string;
+  city: string;
+  age: number;
+  photoUrl: string;
+  greeting: string;
+  openers: string[];
+  requiredInputs: RequiredInput[];
+};
+
+export type ConversationSummary = {
+  astrologerId: string;
+  lastMessage: { role: 'user' | 'astrologer'; text: string; createdAt: number } | null;
+  messageCount: number;
+  updatedAt: number;
 };

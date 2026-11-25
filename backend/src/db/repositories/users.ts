@@ -1,6 +1,7 @@
 import { birthNumber, lifePath, nameNumber } from '../../services/numerology';
 import { SCHEMA_VERSION, type StoredEntitlement, type UserDoc, type UserProfile } from '../../types';
 import { randomBytes } from 'node:crypto';
+import { FieldValue } from 'firebase-admin/firestore';
 
 import { uidForPhone } from '../../lib/auth';
 import { db, refs } from '../firestore';
@@ -14,10 +15,12 @@ export class ProfileIncompleteError extends Error {
 
 export const profileKeyOf =(profile: Pick<UserProfile, 'fullName' | 'dob'>) => `${profile.fullName}|${profile.dob}`;
 
-const withNumbers = (fullName: string, dob: string): UserProfile => ({
+const withNumbers = (fullName: string, dob: string, birth: Pick<UserProfile, 'birthTime' | 'birthPlace'> = {}): UserProfile => ({
   fullName,
   dob,
   numbers: { birth: birthNumber(dob).value, lifePath: lifePath(dob).value, name: nameNumber(fullName).value },
+  birthTime: birth.birthTime ?? null,
+  birthPlace: birth.birthPlace ?? null,
 });
 
 /** Normalised name for admin prefix search ("Aarav  Sharma" → "aarav sharma"). */
@@ -86,8 +89,8 @@ export const usersRepo = {
       return { userId, user, created: !existing };
     }),
 
-  /** Name / date of birth. Derived numbers are recomputed on every change. */
-  updateProfile: (userId: string, patch: { fullName?: string; dob?: string }) =>
+  /** Name / date of birth (+ birth time / place). Derived numbers are recomputed on every change. */
+  updateProfile: (userId: string, patch: { fullName?: string; dob?: string; birthTime?: string; birthPlace?: string }) =>
     db.runTransaction(async (tx) => {
       const ref = refs.user(userId);
       const user = (await tx.get(ref)).data();
@@ -98,7 +101,10 @@ export const usersRepo = {
       const now = Date.now();
       const next: UserDoc = {
         ...user,
-        profile: withNumbers(fullName, dob),
+        profile: withNumbers(fullName, dob, {
+          birthTime: patch.birthTime ?? user.profile?.birthTime,
+          birthPlace: patch.birthPlace ?? user.profile?.birthPlace,
+        }),
         nameLower: searchName(fullName),
         profileCompletedAt: user.profileCompletedAt ?? now,
         updatedAt: now,
@@ -107,11 +113,24 @@ export const usersRepo = {
       return next;
     }),
 
-  setChatSession: (userId: string, astroSessionId: string, profileKey: string) =>
-    refs.user(userId).set({ chat: { astroSessionId, profileKey }, updatedAt: Date.now() } as Partial<UserDoc>, { merge: true }),
+  /** Saves extra details one astrologer asked for (merged with what was saved before). */
+  saveChatContext: (userId: string, profileId: string, values: Record<string, string>) =>
+    refs.user(userId).set({ chatContext: { [profileId]: values }, updatedAt: Date.now() } as Partial<UserDoc>, { merge: true }),
 
   /** Only called from billing.syncSubscription (single writer of the entitlement cache). */
   entitlementWrite: (entitlement: StoredEntitlement) => ({ entitlement, updatedAt: Date.now() }) as Partial<UserDoc>,
+
+  /**
+   * Links a newly created subscription to the user (checkout opened, or admin grant) — written in the
+   * same transaction that creates subscriptions/{id}, so it is set even if the checkout is never paid.
+   * Use with set(…, { merge: true }).
+   */
+  subscriptionLinkWrite: (subscriptionId: string) =>
+    ({
+      latestSubscriptionId: subscriptionId,
+      subscriptionIds: FieldValue.arrayUnion(subscriptionId),
+      updatedAt: Date.now(),
+    }) as unknown as Partial<UserDoc>,
 
   list: async (limit: number) => {
     const snap = await refs.users().orderBy('createdAt', 'desc').limit(limit).get();

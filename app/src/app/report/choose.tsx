@@ -29,9 +29,8 @@ export default function ChooseReport() {
         <NumberedRow
           index={String(REPORT_TYPES.length + 1).padStart(2, '0')}
           title="Astrologer"
-          subtitle="Personal guidance from an expert"
-          badge="Soon"
-          onPress={() => router.push('/astrologer')}
+          subtitle="Chat 1:1 with an expert astrologer"
+          onPress={() => router.navigate('/chat')}
         />
       </View>
       <AppText variant="small" align="center" style={styles.note}>

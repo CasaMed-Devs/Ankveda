@@ -1,45 +1,73 @@
-import { SCHEMA_VERSION, type ChatMessage, type ChatMessageDoc, type ChatProvider, type Daily, type DailyDoc } from '../../types';
+import { SCHEMA_VERSION, type Daily, type DailyDoc } from '../../types';
 import { db, refs } from '../firestore';
 import { DAY_MS } from '../schema';
 
 const DAILY_RETENTION_DAYS = 30;
+/** How long one request may hold the "generating" claim before another may take over. */
+export const DAILY_LOCK_MS = 90_000;
 
-export const chatRepo = {
-  recent: async (userId: string, limit: number): Promise<ChatMessage[]> => {
-    const snap = await refs.chatMessages(userId).orderBy('createdAt', 'desc').limit(limit).get();
-    return snap.docs.map((d) => ({ id: d.id, role: d.data().role, text: d.data().text, createdAt: d.data().createdAt })).reverse();
-  },
+const toDaily = (doc: DailyDoc): Daily => ({
+  date: doc.date,
+  luckyNumber: doc.luckyNumber,
+  luckyTime: doc.luckyTime,
+  theme: doc.theme,
+  title: doc.title,
+  message: doc.message,
+});
 
-  /** Stores a question and its answer atomically. */
-  appendExchange: async (userId: string, question: string, answer: string, provider: ChatProvider): Promise<ChatMessage[]> => {
-    const now = Date.now();
-    const userRef = refs.chatMessages(userId).doc();
-    const botRef = refs.chatMessages(userId).doc();
-    const userMsg: ChatMessageDoc = { schemaVersion: SCHEMA_VERSION, role: 'user', text: question, provider: null, createdAt: now };
-    const botMsg: ChatMessageDoc = { schemaVersion: SCHEMA_VERSION, role: 'astrologer', text: answer, provider, createdAt: now + 1 };
-    const batch = db.batch();
-    batch.create(userRef, userMsg);
-    batch.create(botRef, botMsg);
-    await batch.commit();
-    return [
-      { id: userRef.id, role: 'user', text: question, createdAt: userMsg.createdAt },
-      { id: botRef.id, role: 'astrologer', text: answer, createdAt: botMsg.createdAt },
-    ];
-  },
-};
+/** Docs written before the claim lock existed have no status: they are finished reports. */
+const isReady = (doc: DailyDoc) => (doc.status ?? 'ready') === 'ready';
+
+export type DailyClaim = { kind: 'ready'; daily: Daily } | { kind: 'claimed' } | { kind: 'busy' };
 
 export const dailyRepo = {
-  /** Returns today's cached guidance only if it was written for the current profile. */
-  get: async (userId: string, date: string, profileKey: string): Promise<Daily | null> => {
+  /**
+   * Today's finished guidance, if any. One report per user per IST day: the date is the document id,
+   * and a profile edit does not invalidate it (new details apply from the next day).
+   */
+  get: async (userId: string, date: string): Promise<Daily | null> => {
     const doc = (await refs.dailyGuidance(userId).doc(date).get()).data();
-    if (!doc || doc.profileKey !== profileKey) return null;
-    return { date: doc.date, luckyNumber: doc.luckyNumber, luckyTime: doc.luckyTime, theme: doc.theme, title: doc.title, message: doc.message };
+    return doc && isReady(doc) ? toDaily(doc) : null;
   },
+
+  /**
+   * Claims today's generation so concurrent requests (Home + Daily, double taps) produce one report.
+   * ready → return it; free or stale claim → take it; someone else generating → busy.
+   */
+  claim: (userId: string, date: string, profileKey: string): Promise<DailyClaim> =>
+    db.runTransaction(async (tx) => {
+      const ref = refs.dailyGuidance(userId).doc(date);
+      const doc = (await tx.get(ref)).data();
+      const now = Date.now();
+      if (doc && isReady(doc)) return { kind: 'ready', daily: toDaily(doc) };
+      if (doc?.lockedUntil && doc.lockedUntil > now) return { kind: 'busy' };
+      const placeholder: DailyDoc = {
+        date,
+        luckyNumber: '',
+        luckyTime: '',
+        theme: '',
+        title: '',
+        message: '',
+        status: 'generating',
+        lockedUntil: now + DAILY_LOCK_MS,
+        schemaVersion: SCHEMA_VERSION,
+        profileKey,
+        createdAt: now,
+        expireAt: now + DAILY_RETENTION_DAYS * DAY_MS,
+      };
+      tx.set(ref, placeholder);
+      return { kind: 'claimed' };
+    }),
+
+  /** Generation failed: drop the claim so the next open retries (a failure doesn't use up the day). */
+  release: (userId: string, date: string) => refs.dailyGuidance(userId).doc(date).delete(),
 
   save: (userId: string, daily: Daily, profileKey: string) => {
     const now = Date.now();
     const doc: DailyDoc = {
       ...daily,
+      status: 'ready',
+      lockedUntil: null,
       schemaVersion: SCHEMA_VERSION,
       profileKey,
       createdAt: now,

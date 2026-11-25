@@ -21,11 +21,53 @@ import { colors, fonts, spacing } from '@/theme/tokens';
 
 type Slide = { key: string; cta: string; render: () => React.ReactNode };
 
+type TextStyleProp = React.ComponentProps<typeof AppText>['style'];
+
+/** Line box tall enough for Cormorant's full ascent + descent on Android (hhea and win metrics). */
+const SAFE_LINE = 1.4;
+
+/**
+ * Tight-leading serif text whose descenders (g, y, p) stay fully visible.
+ *
+ * Cormorant's glyphs need ~1.21–1.38em, but the Figma leading here is ~1.05em. Android shrinks the
+ * line box to lineHeight and clips the text view to it, cutting the tails off g / y. Padding doesn't
+ * help (TextView clips it too). So each line is its own Text with a roomy lineHeight, and equal
+ * negative top/bottom margins pull it back: baselines land exactly where the design's lineHeight
+ * puts them, but nothing is clipped.
+ */
+const SerifLines = ({
+  text,
+  style,
+  allowFontScaling,
+}: {
+  text: string;
+  style: TextStyleProp;
+  allowFontScaling?: boolean;
+}) => {
+  const { fontSize = 16, lineHeight } = StyleSheet.flatten(style) ?? {};
+  const designLine = lineHeight ?? fontSize;
+  const extra = Math.max(0, Math.ceil((fontSize * SAFE_LINE - designLine) / 2));
+  const lineStyle = { lineHeight: designLine + extra * 2, marginVertical: -extra };
+
+  return (
+    <View accessible accessibilityRole="text" accessibilityLabel={text.replace(/\n/g, ' ')}>
+      {text.split('\n').map((line, i) => (
+        <AppText
+          key={i}
+          style={[style, lineStyle]}
+          allowFontScaling={allowFontScaling}
+          importantForAccessibility="no"
+        >
+          {line}
+        </AppText>
+      ))}
+    </View>
+  );
+};
+
 /** Hero headline: fixed size (display type, matches Figma on every phone). */
-const Hero = ({ children, style }: { children: React.ReactNode; style: React.ComponentProps<typeof AppText>['style'] }) => (
-  <AppText style={style} allowFontScaling={false}>
-    {children}
-  </AppText>
+const Hero = ({ children, style }: { children: string; style: TextStyleProp }) => (
+  <SerifLines text={children} style={style} allowFontScaling={false} />
 );
 
 /**
@@ -103,20 +145,20 @@ const LuckySlide = () => (
           <AppText style={styles.luckyBig} allowFontScaling={false}>
             7
           </AppText>
-          <AppText style={styles.luckyLabel}>{'Lucky\nNumber'}</AppText>
+          <SerifLines style={styles.luckyLabel} text={'Lucky\nNumber'} />
         </Card>
         <Card tone="soft" style={[styles.luckyCard, styles.luckyTimeCard]}>
           <AppText style={styles.luckyTime} allowFontScaling={false}>
             09:09
           </AppText>
-          <AppText style={styles.luckyLabel}>{'Lucky\nTiming'}</AppText>
+          <SerifLines style={styles.luckyLabel} text={'Lucky\nTiming'} />
         </Card>
       </View>
       <Card tone="soft" style={styles.astroCard}>
         <AppText variant="eyebrow" style={{ letterSpacing: 1.7 }}>
           Personal guidance
         </AppText>
-        <AppText style={styles.astroTitle}>{'Consult with\nan Astrologer'}</AppText>
+        <SerifLines style={styles.astroTitle} text={'Consult with\nan Astrologer'} />
       </Card>
     </View>
   </SlideLayout>
@@ -219,7 +261,7 @@ const styles = StyleSheet.create({
   luckyTimeCard: { flex: 1, paddingHorizontal: 16, paddingVertical: 19, justifyContent: 'space-between' },
   luckyBig: { fontFamily: fonts.serifMedium, fontSize: 75, lineHeight: 77, color: colors.gold },
   luckyTime: { fontFamily: fonts.serifMedium, fontSize: 31, lineHeight: 32, color: colors.gold },
-  luckyLabel: { fontFamily: fonts.serifMedium, fontSize: 25, lineHeight: 26, color: colors.cream },
+  luckyLabel: { fontFamily: fonts.serifMedium, fontSize: 25, lineHeight: 28, color: colors.cream },
   astroCard: { paddingHorizontal: 22, paddingVertical: 16, gap: 12 },
   astroTitle: { fontFamily: fonts.serifMedium, fontSize: 29, lineHeight: 30, color: colors.cream },
   footer: { paddingHorizontal: spacing.gutter, gap: 24, paddingTop: 12 },

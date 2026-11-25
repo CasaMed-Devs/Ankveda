@@ -1,10 +1,11 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState, type ReactNode } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { Card } from '@/components/Cards';
+import { Loader } from '@/components/Loader';
 import { FooterNote, Screen } from '@/components/Screen';
 import { toast } from '@/components/Toast';
 import { formatInvoiceAmount, formatInvoiceDate, formatInvoicePhone, invoiceCustomerName } from '@/lib/invoices/invoiceFormat';
@@ -55,7 +56,7 @@ export default function InvoiceScreen() {
       {invoice ? (
         <InvoiceDetails invoice={invoice} />
       ) : invoices.isLoading ? (
-        <ActivityIndicator color={colors.gold} style={styles.loader} />
+        <Loader size="md" style={styles.loader} />
       ) : (
         <Card style={styles.card}>
           <AppText variant="subtitle">Invoice not found</AppText>
@@ -147,7 +148,7 @@ const InvoiceDetails = ({ invoice }: { invoice: Invoice }) => {
 
 const styles = StyleSheet.create({
   stack: { gap: 14 },
-  loader: { marginTop: 40 },
+  loader: { marginTop: 24 },
   card: { padding: 18, gap: 4 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   paid: { backgroundColor: colors.gold, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 2 },

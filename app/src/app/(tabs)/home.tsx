@@ -1,9 +1,10 @@
 import { router } from 'expo-router';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { ArrowCard, Card } from '@/components/Cards';
 import { Heading } from '@/components/Heading';
+import { Loader } from '@/components/Loader';
 import { LockBadge } from '@/components/LockedPanel';
 import { Screen } from '@/components/Screen';
 import { firstName } from '@/lib/format';
@@ -26,7 +27,7 @@ export default function Home() {
       <View style={styles.birthCardWrap}>
         {home.isLoading ? (
           <Card style={[styles.birthCard, styles.center]}>
-            <ActivityIndicator color={colors.gold} />
+            <Loader size="sm" />
           </Card>
         ) : home.data && !home.data.locked && home.data.birthNumber ? (
           <Card style={styles.birthCard}>
@@ -36,9 +37,19 @@ export default function Home() {
               </AppText>
               <View style={styles.birthCopy}>
                 <AppText variant="title">{home.data.birthTitle}</AppText>
-                <AppText variant="small" style={styles.birthMessage}>
-                  {home.data.birthMessage}
-                </AppText>
+                {home.data.birthMessage ? (
+                  <AppText variant="small" style={styles.birthMessage}>
+                    {home.data.birthMessage}
+                  </AppText>
+                ) : (
+                  // Today's report is being generated (the app started it on open); fills in when ready.
+                  <View style={styles.pending}>
+                    <Loader size="xs" style={styles.pendingLoader} />
+                    <AppText variant="small" style={styles.birthMessage}>
+                      Preparing today’s guidance…
+                    </AppText>
+                  </View>
+                )}
               </View>
             </View>
             <AppText style={styles.birthNumber} allowFontScaling={false}>
@@ -106,6 +117,8 @@ const styles = StyleSheet.create({
   birthText: { flex: 1, gap: 20 },
   birthCopy: { gap: 16 },
   birthMessage: { fontSize: 13, lineHeight: 19 },
+  pending: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  pendingLoader: { alignSelf: 'auto' },
   birthNumber: {
     minWidth: 70,
     fontFamily: fonts.serifMedium,

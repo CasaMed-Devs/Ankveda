@@ -12,7 +12,8 @@
     "test": "node --test lib/src/**/*.test.js",
     "serve": "npm run build && firebase emulators:start --only auth,functions,firestore,hosting",
     "deploy:firebase": "firebase deploy --only functions",
-    "admin:provision": "node scripts/provision-admin.mjs"
+    "admin:provision": "node scripts/provision-admin.mjs",
+    "billing:backfill-links": "node scripts/backfill-user-subscriptions.mjs"
   },
   "dependencies": {
     "@vercel/functions": "^3.11.3",

@@ -1,33 +1,47 @@
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
+import { PrimaryButton } from '@/components/Buttons';
 import { Card } from '@/components/Cards';
+import { DailyLoading } from '@/components/DailyLoading';
 import { Heading } from '@/components/Heading';
 import { LockedPanel } from '@/components/LockedPanel';
 import { Screen } from '@/components/Screen';
+import { ApiError } from '@/lib/api';
 import { useDaily } from '@/lib/queries';
 import { colors, fonts } from '@/theme/tokens';
 
-/** 20 · Daily guidance — Astrology API daily numbers + OpenAI message. Premium only. */
+const EYEBROW = 'A little nudge from the universe';
+
+/**
+ * 20 · Daily guidance — one report per user per IST day, made from astrologyapi.com numerology + OpenAI
+ * using the user's details. Fetched automatically when the app opens (see (tabs)/_layout). Premium only.
+ */
 export default function Daily() {
   const daily = useDaily();
   const data = daily.data?.daily;
+  // First load, or a retry after an error: show the medallion while the report is generated.
+  const generating = daily.isPending || (daily.isFetching && !daily.data);
 
   return (
     <Screen withTabBar>
-      <Heading
-        eyebrow="A little nudge from the universe"
-        title={data?.theme ?? 'Today, choose\nnew beginnings.'}
-        subtitle="A little intention can change your day."
-      />
+      {data ? (
+        <Heading eyebrow={EYEBROW} title={data.theme} subtitle="A little intention can change your day." />
+      ) : (
+        // No placeholder headline while loading — the real theme appears with the report.
+        <AppText variant="eyebrow">{EYEBROW}</AppText>
+      )}
 
       <View style={styles.body}>
-        {daily.isLoading ? (
-          <ActivityIndicator color={colors.gold} style={styles.loader} />
+        {generating ? (
+          <DailyLoading />
         ) : daily.isError ? (
-          <Pressable onPress={() => void daily.refetch()}>
-            <AppText variant="small">We could not load today’s guidance. Tap to try again.</AppText>
-          </Pressable>
+          <View style={styles.error}>
+            <AppText variant="bodyCream" align="center">
+              {daily.error instanceof ApiError ? daily.error.message : 'We could not load today’s guidance.'}
+            </AppText>
+            <PrimaryButton label="Try again" tone="card" onPress={() => void daily.refetch()} />
+          </View>
         ) : daily.data?.locked || !data ? (
           <LockedPanel
             title="Your lucky number, every day."
@@ -57,6 +71,9 @@ export default function Daily() {
                 {data.message}
               </AppText>
             </Card>
+            <AppText variant="caption" align="center">
+              A new reading arrives every day at midnight.
+            </AppText>
           </>
         )}
       </View>
@@ -70,7 +87,7 @@ export default function Daily() {
 
 const styles = StyleSheet.create({
   body: { marginTop: 40, gap: 16 },
-  loader: { marginVertical: 40 },
+  error: { gap: 20, paddingVertical: 24 },
   luckyCard: {
     flexDirection: 'row',
     alignItems: 'flex-end',

@@ -75,14 +75,29 @@ The **Razorpay subscription id** (`sub_…`) is the key that ties billing togeth
 
 ```
 users/{userId}.entitlement.subscriptionId ──► subscriptions/{sub_…} ◄── transactions/{pay_…}.subscriptionId
-                                               ├─ userId ──► users/{userId}
-                                               ├─ planId ──► plans/{planId}
-                                               └─ events/{auto}  (status history)
+users/{userId}.latestSubscriptionId ────────►   ├─ userId ──► users/{userId}
+users/{userId}.subscriptionIds[] ───────────►   ├─ planId ──► plans/{planId}
+                                                ├─ replacedBySubscriptionId / replacesSubscriptionId (re-purchase chain)
+                                                └─ events/{auto}  (status history)
 ```
+
+| User field | Meaning |
+|---|---|
+| `entitlement.subscriptionId` | The subscription **giving access now** (cache, written only by `syncSubscription` / admin actions) |
+| `latestSubscriptionId` | The **most recent** subscription created for the user, paid or not. Written when checkout opens, so it is set even when Razorpay is closed without paying |
+| `subscriptionIds` | **Every** subscription of the user, oldest first (`arrayUnion`) — Razorpay checkouts and admin grants |
+| `trialUsedAt` | First time this account used the trial. Set ⇒ later purchases have no trial (once per account; a deleted account's number starts a new account and gets the trial again) |
+
+All four are optional, so older documents stay valid. `npm run billing:backfill-links` (dry run; `-- --apply` to write) fills them in for existing users.
+
+**Checkout and re-subscribe rules** (`services/billingRules.ts`, unit-tested):
+- A checkout is allowed with no access, or with access that is ending (renewal cancelled). It is refused while a subscription renews, or during complimentary (admin) access.
+- **Re-purchase** (for example, trial → cancel → buy monthly a few days later) always creates a **new** subscription id. The first ₹299 is charged at once, with no trial. When it is paid, `syncSubscription` moves `entitlement` to the new id. Any days left on the old one are dropped, and the two are linked with `replacedBySubscriptionId` ⇄ `replacesSubscriptionId` (plus a `replaced_by_new_subscription` history event on the old one). Late webhooks from the old subscription never take access back.
+- An **unpaid checkout** (`created`) for the same plan and terms is reopened instead of creating another Razorpay subscription. A trial checkout can be reopened for 30 minutes, because Razorpay fixes `start_at` when it is created; a checkout without a trial can be reopened for 24 hours.
 
 | Step | What is written |
 |---|---|
-| Checkout starts (`POST /subscriptions`) | `subscriptions/{sub_…}` created (status `created`, plan snapshot, trial end) + history event |
+| Checkout starts (`POST /subscriptions`) | `subscriptions/{sub_…}` created (status `created`, plan snapshot — without the trial if already used — trial end) + history event + `users.latestSubscriptionId` / `subscriptionIds`, all in one transaction. A reopened unpaid checkout writes nothing new |
 | Payment verified in the app (`POST /subscriptions/verify`) | subscription synced from Razorpay, user entitlement set, **checkout payment recorded in `transactions`** (₹49 trial) |
 | Webhook `subscription.*` | subscription state + history event + user entitlement (single writer: `syncSubscription`) |
 | Webhook `subscription.charged` / `payment.*` | `transactions/{pay_…}` upserted: `trial` → `first_charge` → `renewal`, failures keep the reason |

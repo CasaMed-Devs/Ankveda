@@ -1,13 +1,45 @@
-import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { focusManager, QueryClient, useInfiniteQuery, useMutation, useQuery, type InfiniteData } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
-import type { Report, ReportInput, ReportType, User } from '@/lib/types';
+import { msUntilIstMidnight, todayIst } from '@/lib/format';
+import type { ChatPage, Report, ReportInput, ReportType, User } from '@/lib/types';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: 1, staleTime: 30_000 },
   },
+});
+
+// React Native has no window focus: treat "app came to the foreground" as focus, so stale queries
+// (home, daily, …) refetch when the user reopens the app.
+focusManager.setEventListener((handleFocus) => {
+  const sub = AppState.addEventListener('change', (state) => handleFocus(state === 'active'));
+  return () => sub.remove();
+});
+
+/** Today's IST date; re-renders at 00:00 IST and whenever the app returns to the foreground. */
+export const useIstDate = () => {
+  const [date, setDate] = useState(todayIst);
+  useEffect(() => {
+    const update = () => setDate(todayIst());
+    const sub = AppState.addEventListener('change', (state) => state === 'active' && update());
+    const timer = setTimeout(update, msUntilIstMidnight() + 1_000);
+    return () => {
+      sub.remove();
+      clearTimeout(timer);
+    };
+  }, [date]);
+  return date;
+};
+
+// When the session ends (sign-out, or the server says the account no longer exists), drop every cached
+// profile / report / chat / payment so nothing of the old account stays visible — even if the same phone
+// signs in again as a new account.
+useAuthStore.subscribe((state, prev) => {
+  if (prev.token && !state.token) queryClient.clear();
 });
 
 export const keys = {
@@ -17,7 +49,10 @@ export const keys = {
   plan: ['plan', 'featured'] as const,
   reports: ['reports'] as const,
   report: (id: string) => ['reports', id] as const,
+  astrologers: ['astrologers'] as const,
   chat: ['chat'] as const,
+  conversations: ['chat', 'conversations'] as const,
+  chatMessages: (astrologerId: string) => ['chat', 'messages', astrologerId] as const,
   invoices: ['invoices'] as const,
 };
 
@@ -51,9 +86,41 @@ export const useEntitlement = () => {
 };
 
 export const useHome = () => useQuery({ queryKey: keys.home, queryFn: api.home });
-export const useDaily = () => useQuery({ queryKey: keys.daily, queryFn: api.daily });
-export const useFeaturedPlan = () =>
-  useQuery({ queryKey: keys.plan, queryFn: async () => (await api.featuredPlan()).plan });
+
+/**
+ * Daily guidance for one IST day. The server makes exactly one report per user per day, so within the day
+ * the result never goes stale; a new date is a new key → a fresh fetch after 00:00 IST.
+ */
+export const dailyQuery = (date: string) => ({
+  queryKey: [...keys.daily, date] as const,
+  queryFn: async () => {
+    const result = await api.daily();
+    // Home's birth-message card shows today's message once it exists.
+    void queryClient.invalidateQueries({ queryKey: keys.home });
+    return result;
+  },
+  staleTime: Infinity,
+  retry: 1,
+});
+
+export const useDaily = () => useQuery(dailyQuery(useIstDate()));
+
+/** Starts today's guidance as soon as the user is in the app (premium, profile complete). */
+export const usePrefetchDaily = (enabled: boolean) => {
+  const date = useIstDate();
+  useEffect(() => {
+    if (enabled) void queryClient.prefetchQuery(dailyQuery(date));
+  }, [enabled, date]);
+};
+/** The paywall plan as offered to this user: without the trial once the account has used it. */
+export const useFeaturedPlan = () => {
+  const trialEligible = useMe().data?.trialEligible !== false;
+  return useQuery({
+    queryKey: keys.plan,
+    queryFn: async () => (await api.featuredPlan()).plan,
+    select: (plan) => (plan && !trialEligible ? { ...plan, trialDays: 0, trialPriceInPaise: 0 } : plan),
+  });
+};
 
 export const useReports = () =>
   useQuery({ queryKey: keys.reports, queryFn: async () => (await api.reports()).reports });
@@ -95,20 +162,70 @@ export const useUpdateMe = () =>
     onSuccess: ({ user }) => applyUser(user),
   });
 
-export const useChatHistory = () => useQuery({ queryKey: keys.chat, queryFn: api.chatHistory });
+// ── Chat with astrologers (Persona API via the backend; history is stored there) ──
 
-export const useSendChat = () => {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: api.sendChat,
+/** All astrologers. The list rarely changes, so it is kept for 10 minutes. */
+export const useAstrologers = () =>
+  useQuery({
+    queryKey: keys.astrologers,
+    queryFn: async () => (await api.astrologers()).astrologers,
+    staleTime: 10 * 60_000,
+  });
+
+export const useAstrologer = (id: string) => {
+  const list = useAstrologers();
+  return { ...list, data: list.data?.find((a) => a.id === id) };
+};
+
+/** The user's chats, most recent first (Premium only). */
+export const useConversations = (enabled: boolean) =>
+  useQuery({ queryKey: keys.conversations, enabled, queryFn: async () => (await api.conversations()).conversations });
+
+/** History with one astrologer. pages[0] is the newest page; older pages are appended as the user scrolls up. */
+export const useChatMessages = (astrologerId: string, enabled: boolean) =>
+  useInfiniteQuery({
+    queryKey: keys.chatMessages(astrologerId),
+    enabled,
+    // Always load the newest history when a chat opens (never trust a cached page).
+    staleTime: 0,
+    refetchOnMount: 'always',
+    gcTime: 5 * 60_000,
+    initialPageParam: undefined as number | undefined,
+    queryFn: ({ pageParam }) => api.chatMessages(astrologerId, pageParam),
+    getNextPageParam: (last) => (last.hasMore && last.nextCursor !== null ? last.nextCursor : undefined),
+  });
+
+type ChatData = InfiniteData<ChatPage, number | undefined>;
+
+const updateNewestPage = (astrologerId: string, update: (page: ChatPage) => ChatPage) =>
+  queryClient.setQueryData<ChatData>(keys.chatMessages(astrologerId), (old) =>
+    old ? { ...old, pages: [update(old.pages[0]), ...old.pages.slice(1)] } : old,
+  );
+
+export const useSendChat = (astrologerId: string) =>
+  useMutation({
+    mutationFn: (text: string) => api.sendChat(astrologerId, text),
     onSuccess: ({ messages }) => {
-      client.setQueryData(keys.chat, (old: Awaited<ReturnType<typeof api.chatHistory>> | undefined) => ({
-        locked: false,
-        messages: [...(old?.messages ?? []), ...messages],
-      }));
+      updateNewestPage(astrologerId, (page) => ({ ...page, messages: [...page.messages, ...messages] }));
+      void queryClient.invalidateQueries({ queryKey: keys.conversations });
+    },
+    onError: (error) => {
+      // Birth details went missing (e.g. the astrologer now needs more): reload to show the form.
+      if ((error as { code?: string }).code === 'missing_context') {
+        void queryClient.invalidateQueries({ queryKey: keys.chatMessages(astrologerId) });
+      }
     },
   });
-};
+
+/** Saves birth details an astrologer asked for; birth time / place also land on the profile. */
+export const useSaveChatContext = (astrologerId: string) =>
+  useMutation({
+    mutationFn: (values: Record<string, string>) => api.saveChatContext(astrologerId, values),
+    onSuccess: ({ missing }) => {
+      updateNewestPage(astrologerId, (page) => ({ ...page, missing }));
+      void queryClient.invalidateQueries({ queryKey: keys.me });
+    },
+  });
 
 /** The user's tax invoices (trial + subscription payments), newest first. */
 export const useInvoices = () => {

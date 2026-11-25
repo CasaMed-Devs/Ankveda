@@ -11,6 +11,7 @@
  * refund). If billing cannot be stopped, nothing is deleted.
  */
 import { refs, db } from '../db/firestore';
+import { forgetUser } from '../lib/auth';
 import { HttpError } from '../lib/http';
 import { logger } from '../lib/logger';
 import type { DeletedAccountDoc, SubscriptionStatus } from '../types';
@@ -80,6 +81,7 @@ export const deleteOwnAccount = async (userId: string) => {
     );
   });
 
+  forgetUser(userId);
   // Headline figures include this user — recompute on the next dashboard load.
   await refs.adminStats().doc('overview').delete().catch(() => undefined);
   return { deleted: true as const, billingCancelled: billingCancelled.length };

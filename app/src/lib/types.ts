@@ -54,7 +54,12 @@ export type User = {
   phone: string;
   fullName?: string;
   dob?: string;
+  /** "HH:mm", asked for in chat by astrologers who need it. */
+  birthTime?: string;
+  birthPlace?: string;
   entitlement: Entitlement;
+  /** False once this account has used the trial (trial is once per account). Missing on older servers = true. */
+  trialEligible?: boolean;
 };
 
 export type PlanPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
@@ -73,7 +78,9 @@ export type HomeSummary = {
   locked: boolean;
   birthNumber?: number;
   birthTitle?: string;
-  birthMessage?: string;
+  /** Today's guidance message; null while today's report is still being prepared. */
+  birthMessage?: string | null;
+  dailyPending?: boolean;
 };
 
 export type Daily = {
@@ -90,6 +97,39 @@ export type ChatMessage = {
   role: 'user' | 'astrologer';
   text: string;
   createdAt: number;
+};
+
+/** A detail an astrologer needs before chatting (birth time, place, partner's birth details…). */
+export type RequiredInput = { key: string; label: string; example?: string; required: boolean };
+
+export type Astrologer = {
+  id: string;
+  name: string;
+  speciality: string;
+  about: string;
+  city: string;
+  age: number;
+  photoUrl: string;
+  greeting: string;
+  openers: string[];
+  requiredInputs: RequiredInput[];
+};
+
+export type ConversationSummary = {
+  astrologerId: string;
+  lastMessage: { role: 'user' | 'astrologer'; text: string; createdAt: number } | null;
+  messageCount: number;
+  updatedAt: number;
+};
+
+/** One page of chat history, oldest → newest. `nextCursor` loads older messages. */
+export type ChatPage = {
+  locked: boolean;
+  /** Required inputs still missing (see RequiredInput.key). */
+  missing: string[];
+  messages: ChatMessage[];
+  nextCursor: number | null;
+  hasMore: boolean;
 };
 
 export type CheckoutSession = {

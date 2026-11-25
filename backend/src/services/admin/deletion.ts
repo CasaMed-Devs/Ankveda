@@ -2,8 +2,11 @@
  * Permanent user deletion — a resumable job in userDeletions/{userId}.
  *
  * Steps (each idempotent; finished steps are recorded, so a retry resumes where it stopped):
- *   1. cancelRazorpay — cancel every still-billable Razorpay subscription immediately. If billing cannot
- *                       be stopped (no keys, Razorpay error) the job stops here and NOTHING is deleted.
+ *   1. cancelRazorpay — cancel every still-billable Razorpay subscription immediately. "created" ones
+ *                       (checkout never authorised) can't charge and never block. If billing cannot be
+ *                       stopped (no keys, Razorpay error, a subscription made with the other environment's
+ *                       keys) the job stops here and NOTHING is deleted — unless the admin retries with
+ *                       `force`, which deletes anyway and records the subscription ids in the audit log.
  *   2. transactions   — delete the user's payment records (batched).
  *   3. subscriptions  — recursiveDelete each subscription (removes its events subcollection too).
  *   4. userData       — recursiveDelete users/{id}: profile, reports, chatMessages, dailyGuidance.
@@ -14,6 +17,7 @@
  * is nothing else to remove. The audit entry keeps only the opaque user id and counts — no name or phone.
  */
 import { refs, db } from '../../db/firestore';
+import { forgetUser } from '../../lib/auth';
 import { HttpError } from '../../lib/http';
 import { logger } from '../../lib/logger';
 import type { AdminActor, SubscriptionStatus, UserDeletionDoc, UserDeletionStep } from '../../types';
@@ -33,22 +37,48 @@ const stepError = (step: UserDeletionStep, error: unknown) => {
   return `${step}: ${reason}`;
 };
 
-const runStep = async (userId: string, job: UserDeletionDoc, actor: AdminActor, step: UserDeletionStep) => {
+/** Thrown when Razorpay billing could not be confirmed stopped; the admin may retry with force. */
+class BillingNotStopped extends Error {}
+
+const runStep = async (userId: string, job: UserDeletionDoc, actor: AdminActor, step: UserDeletionStep, opts: DeleteOptions) => {
   switch (step) {
     case 'cancelRazorpay': {
       const subs = await refs.subscriptions().where('userId', '==', userId).get();
       const billable = subs.docs.filter((d) => (d.data().source ?? 'razorpay') === 'razorpay' && BILLABLE.includes(d.data().status));
-      if (billable.length && !razorpayConfigured()) {
-        throw new Error('Razorpay keys are not configured, so active billing cannot be stopped');
+      if (!billable.length) return;
+
+      if (!razorpayConfigured()) {
+        if (opts.force) {
+          job.billingNotStopped = billable.map((d) => d.id);
+          return;
+        }
+        throw new BillingNotStopped('Razorpay keys are not configured on this server, so billing cannot be stopped');
       }
+
+      const notStopped: string[] = [];
+      const reasons: string[] = [];
       for (const doc of billable) {
         try {
           await cancelRazorpaySubscription(doc.id, false);
         } catch (error) {
-          // Already cancelled/completed in Razorpay → fine; anything else stops the deletion.
+          // Already cancelled / completed / expired in Razorpay → fine.
+          // "created" = checkout opened but never authorised: no mandate, Razorpay can never charge it.
           const latest = await fetchRazorpaySubscription(doc.id).catch(() => null);
-          if (!latest || BILLABLE.includes(latest.status as SubscriptionStatus)) throw error;
+          const status = latest?.status as SubscriptionStatus | undefined;
+          if (status && (status === 'created' || !BILLABLE.includes(status))) continue;
+          notStopped.push(doc.id);
+          reasons.push(
+            latest
+              ? `${doc.id} is still ${status}`
+              : // Typically a subscription made with the other environment's keys (test vs live).
+                `${doc.id}: ${stepError(step, error).replace(`${step}: `, '')}`,
+          );
         }
+      }
+      if (notStopped.length) {
+        if (!opts.force) throw new BillingNotStopped(`could not cancel Razorpay subscription ${reasons.join('; ')}`);
+        job.billingNotStopped = notStopped;
+        logger.warn('User deletion forced past Razorpay cancellation', { userId, subscriptionIds: notStopped });
       }
       return;
     }
@@ -78,6 +108,10 @@ const runStep = async (userId: string, job: UserDeletionDoc, actor: AdminActor, 
     }
     case 'userData':
       // Works for soft-deleted accounts too: the parent doc is gone but its subcollections remain.
+      // Delete the profile doc first: the app's session is rejected from then on, so an in-flight request
+      // can't write chat / reports back while the subcollections are being removed.
+      forgetUser(userId);
+      await refs.user(userId).delete();
       await db.recursiveDelete(refs.user(userId));
       await refs.deletedAccounts().doc(userId).delete();
       return;
@@ -94,20 +128,30 @@ const runStep = async (userId: string, job: UserDeletionDoc, actor: AdminActor, 
 
 export const getDeletionJob = async (userId: string) => (await jobRef(userId).get()).data() ?? null;
 
-export const deleteUser = async (userId: string, actor: AdminActor) => {
+export type DeleteOptions = {
+  /** Delete even when Razorpay billing can't be confirmed stopped (the admin cancels it in the dashboard). */
+  force?: boolean;
+};
+
+export const deleteUser = async (userId: string, actor: AdminActor, opts: DeleteOptions = {}) => {
   const now = Date.now();
   // An active account, or one the user already deleted from the app (snapshot in deletedAccounts).
   const [user, existing] = await Promise.all([
     refs.user(userId).get().then(async (s) => s.data() ?? (await refs.deletedAccounts().doc(userId).get()).data()),
     getDeletionJob(userId),
   ]);
-  if (existing?.status === 'completed') return existing;
+  // A completed job only means "already gone" if the account is still gone. The same id can come back
+  // (the phone-derived legacy id is reused when that number logs in again), and then a fresh deletion
+  // must run — returning the old job would report success while deleting nothing.
+  const recreated = existing?.status === 'completed' && !!user;
+  if (existing?.status === 'completed' && !recreated) return existing;
   if (!user && !existing) throw new HttpError(404, 'User not found.', 'not_found');
   if (existing?.status === 'running' && now - existing.updatedAt < STALE_RUN_MS) {
     throw new HttpError(409, 'This user is already being deleted. Refresh in a moment.', 'deletion_running');
   }
 
-  const job: UserDeletionDoc = existing
+  const resume = existing && !recreated;
+  const job: UserDeletionDoc = resume
     ? { ...existing, status: 'running', lastError: null, updatedAt: now }
     : {
         status: 'running',
@@ -126,7 +170,7 @@ export const deleteUser = async (userId: string, actor: AdminActor) => {
   for (const step of STEPS) {
     if (job.steps[step]) continue;
     try {
-      await runStep(userId, job, actor, step);
+      await runStep(userId, job, actor, step, opts);
       job.steps[step] = Date.now();
       job.updatedAt = Date.now();
       await jobRef(userId).set(job);
@@ -136,13 +180,14 @@ export const deleteUser = async (userId: string, actor: AdminActor) => {
       job.updatedAt = Date.now();
       await jobRef(userId).set(job);
       logger.error('User deletion stopped', { userId, step, error });
-      throw new HttpError(
-        502,
-        step === 'cancelRazorpay'
-          ? `Deletion stopped before anything was removed — ${job.lastError}. Fix this and retry.`
-          : `Deletion stopped at "${step}" — ${job.lastError}. Retry to resume from this step.`,
-        'deletion_failed',
-      );
+      if (error instanceof BillingNotStopped) {
+        throw new HttpError(
+          409,
+          `Nothing was deleted — ${error.message}. Cancel it in the Razorpay dashboard, then delete anyway.`,
+          'billing_not_stopped',
+        );
+      }
+      throw new HttpError(502, `Deletion stopped at "${step}" — ${job.lastError}. Retry to resume from this step.`, 'deletion_failed');
     }
   }
 
@@ -158,10 +203,19 @@ export const deleteUser = async (userId: string, actor: AdminActor) => {
       deletedSubscriptions: completed.deleted.subscriptions,
       deletedTransactions: completed.deleted.transactions,
       deletedPaymentsInPaise: completed.deleted.paymentsInPaise,
-      resumed: !!existing,
+      resumed: !!resume,
+      recreatedAfterEarlierDeletion: recreated,
+      // Razorpay subscription ids the admin chose to delete past (cancel them in the Razorpay dashboard).
+      billingNotStopped: completed.billingNotStopped ?? [],
     },
   });
-  // Cached headline figures include this user — recompute on the next dashboard load.
+  // Cached headline figures and daily charts include this user's signup and payments — drop them so the
+  // next dashboard load recomputes without the user (one small doc per month; rebuilt on demand).
   await refs.adminStats().doc('overview').delete().catch(() => undefined);
+  await refs
+    .adminDailyStats()
+    .listDocuments()
+    .then((docs) => Promise.all(docs.map((d) => d.delete())))
+    .catch((error) => logger.warn('Could not clear cached daily stats after deletion', { userId, error }));
   return completed;
 };

@@ -6,7 +6,7 @@ import { uidOf } from '../lib/auth';
 import { handle, HttpError, parseBody } from '../lib/http';
 import { dobSchema, nameSchema } from '../lib/validation';
 import { deleteOwnAccount } from '../services/accountDeletion';
-import { getDaily } from '../services/daily';
+import { getDaily, readDaily } from '../services/daily';
 import { isPremiumUser, publicUser } from '../services/entitlement';
 import { ARCHETYPES } from '../services/numerology';
 import type { UserDoc } from '../types';
@@ -39,7 +39,15 @@ meRouter.put(
   '/me',
   handle(async (req, res) => {
     const uid = uidOf(req);
-    const patch = parseBody(z.object({ fullName: nameSchema.optional(), dob: dobSchema.optional() }), req.body);
+    const patch = parseBody(
+      z.object({
+        fullName: nameSchema.optional(),
+        dob: dobSchema.optional(),
+        birthTime: z.string().regex(/^([01]d|2[0-3]):[0-5]d$/, 'Use HH:MM for the birth time.').optional(),
+        birthPlace: z.string().trim().min(2, 'Enter your birth place.').max(80).optional(),
+      }),
+      req.body,
+    );
     try {
       const user = await usersRepo.updateProfile(uid, patch);
       res.json({ user: publicUser(uid, user) });
@@ -72,8 +80,15 @@ meRouter.get(
       return;
     }
     const number = user.profile.numbers.birth;
-    const daily = await getDaily(uid, user.profile);
-    res.json({ locked: false, birthNumber: number, birthTitle: ARCHETYPES[number].title, birthMessage: daily.message });
+    // Read-only: Home never waits on the astrology / OpenAI calls. /daily generates (the app prefetches it).
+    const daily = await readDaily(uid);
+    res.json({
+      locked: false,
+      birthNumber: number,
+      birthTitle: ARCHETYPES[number].title,
+      birthMessage: daily?.message ?? null,
+      dailyPending: !daily,
+    });
   }),
 );
 

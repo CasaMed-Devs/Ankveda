@@ -14,7 +14,13 @@ import {
   syncSubscription,
   type RazorpaySubscriptionEntity,
 } from '../services/billing';
-import type { RazorpayPaymentLike } from '../services/billingRules';
+import {
+  canStartCheckout,
+  checkoutTerms,
+  reusablePendingCheckout,
+  trialAllowed,
+  type RazorpayPaymentLike,
+} from '../services/billingRules';
 import { isPremiumUser, publicUser } from '../services/entitlement';
 import {
   cancelRazorpaySubscription,
@@ -29,35 +35,65 @@ import { loadUser } from './me';
 
 export const subscriptionsRouter = Router();
 
+/**
+ * Opens a checkout. Rules (services/billingRules):
+ *  - allowed with no access, or with access that is ending (cancelled renewal) — a re-purchase creates a
+ *    NEW subscription id that takes over access once paid; blocked while renewing or on complimentary access
+ *  - the trial is offered once per account (users.trialUsedAt)
+ *  - an unpaid checkout for the same plan/terms is reopened instead of creating another Razorpay subscription
+ * The subscription is linked to the user (latestSubscriptionId / subscriptionIds) before checkout opens.
+ */
 subscriptionsRouter.post(
   '/subscriptions',
   handle(async (req, res) => {
     const uid = uidOf(req);
     const { planId } = parseBody(z.object({ planId: z.string().min(1) }), req.body);
     const user = await loadUser(uid);
-    if (isPremiumUser(user)) throw new HttpError(409, 'You already have Ankveda Premium.', 'already_premium');
+    if (!canStartCheckout(user.entitlement)) throw new HttpError(409, 'You already have Ankveda Premium.', 'already_premium');
 
     const plan = await plansRepo.get(planId);
     if (!plan || !plan.active) throw new HttpError(404, 'This plan is no longer available. Please refresh.', 'plan_unavailable');
 
-    const subscription = await createRazorpaySubscription({ plan, planId, uid, phone: user.phone });
-    await subscriptionsRepo.createPending({
-      subscriptionId: subscription.id,
-      userId: uid,
-      planId,
-      totalCount: subscription.total_count,
-      startAt: subscription.start_at ? subscription.start_at * 1000 : null,
-    });
+    const withTrial = trialAllowed(termsOf(plan), user.trialUsedAt);
+    const terms = checkoutTerms(termsOf(plan), withTrial);
+
+    let subscriptionId = await reopenPendingCheckout(user.latestSubscriptionId, planId, withTrial);
+    if (!subscriptionId) {
+      const subscription = await createRazorpaySubscription({ plan, planId, uid, phone: user.phone, withTrial });
+      await subscriptionsRepo.createPending({
+        subscriptionId: subscription.id,
+        userId: uid,
+        planId,
+        totalCount: subscription.total_count,
+        startAt: subscription.start_at ? subscription.start_at * 1000 : null,
+        withTrial,
+      });
+      subscriptionId = subscription.id;
+    }
 
     res.json({
       keyId: publicKeyId(),
-      subscriptionId: subscription.id,
+      subscriptionId,
       planName: plan.name,
-      description: termsOf(plan).trialDays > 0 ? `${termsOf(plan).trialDays} day trial · ${plan.name}` : plan.name,
+      description: terms.trialDays > 0 ? `${terms.trialDays} day trial · ${plan.name}` : plan.name,
       phone: `+91${user.phone}`,
     });
   }),
 );
+
+/** The user's latest unpaid checkout, if it can be reopened (same plan and terms, recent, still unpaid in Razorpay). */
+const reopenPendingCheckout = async (latestSubscriptionId: string | null | undefined, planId: string, withTrial: boolean) => {
+  if (!latestSubscriptionId) return null;
+  const pending = await subscriptionsRepo.get(latestSubscriptionId);
+  if (!reusablePendingCheckout(pending, { planId, withTrial })) return null;
+  try {
+    const live = await fetchRazorpaySubscription(latestSubscriptionId);
+    return live.status === 'created' ? latestSubscriptionId : null;
+  } catch (error) {
+    logger.warn('Could not re-check pending checkout; creating a new one', { id: latestSubscriptionId, error });
+    return null;
+  }
+};
 
 subscriptionsRouter.post(
   '/subscriptions/verify',
@@ -89,12 +125,17 @@ subscriptionsRouter.post(
   '/subscriptions/restore',
   handle(async (req, res) => {
     const uid = uidOf(req);
-    for (const sub of await subscriptionsRepo.listByUser(uid, 5)) {
-      if (sub.source === 'admin_grant') continue; // complimentary access has no Razorpay subscription
+    const linked = (await loadUser(uid)).subscriptionIds;
+    // Newest first; older accounts without the list fall back to the userId query.
+    const ids = linked?.length
+      ? linked.slice(-5).reverse()
+      : (await subscriptionsRepo.listByUser(uid, 5)).filter((s) => s.source !== 'admin_grant').map((s) => s.id);
+    for (const id of ids) {
+      if (id.startsWith('grant_')) continue; // complimentary access has no Razorpay subscription
       try {
-        await syncSubscription(await fetchRazorpaySubscription(sub.id), { event: 'restore' });
+        await syncSubscription(await fetchRazorpaySubscription(id), { event: 'restore' });
       } catch (error) {
-        logger.warn('Restore: could not refresh subscription', { id: sub.id, error });
+        logger.warn('Restore: could not refresh subscription', { id, error });
       }
     }
     const user = publicUser(uid, await loadUser(uid));

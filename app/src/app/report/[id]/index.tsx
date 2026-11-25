@@ -1,9 +1,10 @@
 import { Redirect, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
 import { Card } from '@/components/Cards';
+import { Loader } from '@/components/Loader';
 import { Screen } from '@/components/Screen';
 import { toast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
@@ -26,7 +27,7 @@ export default function ReportResult() {
   if (report.isLoading) {
     return (
       <Screen headerAction={{ label: 'Reports', onPress: goReports }}>
-        <ActivityIndicator color={colors.gold} style={{ marginTop: 80 }} />
+        <Loader size="md" style={{ marginTop: 56 }} />
       </Screen>
     );
   }

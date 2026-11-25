@@ -1,9 +1,10 @@
 import { router } from 'expo-router';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Cards';
 import { Heading } from '@/components/Heading';
+import { Loader } from '@/components/Loader';
 import { Screen } from '@/components/Screen';
 import { ApiError } from '@/lib/api';
 import { formatInvoiceAmount, formatInvoiceDate } from '@/lib/invoices/invoiceFormat';
@@ -21,7 +22,7 @@ export default function Invoices() {
 
       <View style={styles.list}>
         {invoices.isLoading ? (
-          <ActivityIndicator color={colors.gold} style={styles.loader} />
+          <Loader size="md" style={styles.loader} />
         ) : invoices.isError ? (
           <Card style={styles.empty} onPress={() => void invoices.refetch()}>
             <AppText variant="subtitle">Could not load invoices</AppText>
@@ -67,7 +68,7 @@ const InvoiceRow = ({ invoice }: { invoice: Invoice }) => (
 
 const styles = StyleSheet.create({
   list: { marginTop: 32, gap: 12 },
-  loader: { marginTop: 40 },
+  loader: { marginTop: 24 },
   empty: { padding: 18, gap: 8 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 16, paddingHorizontal: 18 },
   rowText: { flex: 1, gap: 4 },

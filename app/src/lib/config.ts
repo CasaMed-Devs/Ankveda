@@ -4,6 +4,9 @@ export const LEGAL_URLS = {
   privacy: process.env.EXPO_PUBLIC_PRIVACY_URL ?? 'https://ankveda.app/privacy',
 };
 
+export const APP_NAME = 'Ankveda';
+export const SUPPORT_EMAIL = 'support@houseoftech.ai';
+
 export const RESEND_SECONDS = 30;
 
 // Backend selection. Set EXPO_PUBLIC_API_TARGET to vercel | firebase | local.

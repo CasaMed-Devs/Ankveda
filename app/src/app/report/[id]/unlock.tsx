@@ -1,10 +1,11 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { LinkButton, PrimaryButton } from '@/components/Buttons';
 import { Card } from '@/components/Cards';
 import { Heading } from '@/components/Heading';
+import { Loader } from '@/components/Loader';
 import { PlanCard } from '@/components/PlanCard';
 import { Screen } from '@/components/Screen';
 import { usePremiumCheckout } from '@/hooks/usePremiumCheckout';
@@ -71,7 +72,7 @@ export default function UnlockReport() {
         </View>
 
         {isPremium ? null : plan.isLoading ? (
-          <ActivityIndicator color={colors.gold} />
+          <Loader size="sm" />
         ) : plan.data ? (
           <PlanCard plan={plan.data} />
         ) : null}

@@ -5,8 +5,9 @@ import {
   type SubscriptionDoc,
   type TransactionDoc,
 } from '../../types';
-import { effectiveTerms } from '../../services/billingRules';
+import { checkoutTerms, effectiveTerms } from '../../services/billingRules';
 import { db, refs } from '../firestore';
+import { usersRepo } from './users';
 
 export type PlanWithId = PlanDoc & { id: string };
 
@@ -69,11 +70,23 @@ export const subscriptionsRepo = {
 
   /**
    * Created when checkout starts, keyed by the Razorpay subscription id.
-   * Verifies both foreign keys (user, plan) exist inside the same transaction.
+   * Verifies both foreign keys (user, plan) exist, and links the subscription to the user
+   * (users.latestSubscriptionId / subscriptionIds) — all in one transaction, so the link exists
+   * even when the checkout is closed without paying.
+   * `withTrial: false` stores the terms without the trial (trial already used), so the first payment
+   * is classified and invoiced as the monthly charge.
    */
-  createPending: (args: { subscriptionId: string; userId: string; planId: string; totalCount: number; startAt: number | null }) =>
+  createPending: (args: {
+    subscriptionId: string;
+    userId: string;
+    planId: string;
+    totalCount: number;
+    startAt: number | null;
+    withTrial: boolean;
+  }) =>
     db.runTransaction(async (tx) => {
-      const [user, plan] = await Promise.all([tx.get(refs.user(args.userId)), tx.get(refs.plans().doc(args.planId))]);
+      const userRef = refs.user(args.userId);
+      const [user, plan] = await Promise.all([tx.get(userRef), tx.get(refs.plans().doc(args.planId))]);
       if (!user.exists) throw new Error(`User ${args.userId} not found`);
       const planDoc = plan.data();
       if (!planDoc) throw new Error(`Plan ${args.planId} not found`);
@@ -82,7 +95,7 @@ export const subscriptionsRepo = {
         schemaVersion: SCHEMA_VERSION,
         userId: args.userId,
         planId: args.planId,
-        planSnapshot: termsOf(planDoc),
+        planSnapshot: checkoutTerms(termsOf(planDoc), args.withTrial),
         razorpayPlanId: planDoc.razorpayPlanId,
         razorpayCustomerId: null,
         status: 'created',
@@ -108,6 +121,7 @@ export const subscriptionsRepo = {
         razorpayEventId: null,
         receivedAt: now,
       });
+      tx.set(userRef, usersRepo.subscriptionLinkWrite(args.subscriptionId), { merge: true });
       return doc;
     }),
 

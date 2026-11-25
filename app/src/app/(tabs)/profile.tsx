@@ -1,5 +1,4 @@
 import { router } from 'expo-router';
-import { useState } from 'react';
 import { Linking, Pressable, StyleSheet, View } from 'react-native';
 
 import { useAppAlert } from '@/components/AppAlert';
@@ -8,11 +7,11 @@ import { PrimaryButton } from '@/components/Buttons';
 import { ArrowCard } from '@/components/Cards';
 import { Screen } from '@/components/Screen';
 import { useToast } from '@/components/Toast';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
-import { LEGAL_URLS } from '@/lib/config';
+import { APP_NAME, LEGAL_URLS, SUPPORT_EMAIL } from '@/lib/config';
 import { formatLongDate, formatPhone } from '@/lib/format';
-import { applyUser, queryClient, useEntitlement, useMe } from '@/lib/queries';
+import { queryClient, useEntitlement, useMe } from '@/lib/queries';
 import { borderWidth, colors, radii } from '@/theme/tokens';
 
 /** Ends the local session: token, cached data, back to the start. */
@@ -26,22 +25,30 @@ const endSession = async () => {
 export default function Profile() {
   const me = useMe();
   const { isPremium, entitlement } = useEntitlement();
-  const [restoring, setRestoring] = useState(false);
   const alert = useAppAlert();
   const toast = useToast();
   const user = me.data;
 
-  const restore = async () => {
-    setRestoring(true);
+  const openSupport = async () => {
+    const number = (user?.phone ?? '').replace(/\D/g, '').slice(-10);
+    const subject = `Support Request – ${APP_NAME}`;
+    const body = [
+      'Hi Support Team,',
+      '',
+      `My number is ${number}.`,
+      'I am facing an issue with the application.',
+      '',
+      'Issue: [Describe your issue here]',
+      '',
+      'Please help me resolve this issue.',
+      '',
+      'Thank you.',
+    ].join('\n');
+    const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     try {
-      const { user: fresh, restored } = await api.restorePurchases();
-      applyUser(fresh);
-      if (restored) toast.success('Your Ankveda Premium access is active again.');
-      else alert({ title: 'Restore purchases', message: 'We could not find an active subscription on this number.' });
-    } catch (e) {
-      alert({ title: 'Restore purchases', message: e instanceof ApiError ? e.message : 'Please try again.' });
-    } finally {
-      setRestoring(false);
+      await Linking.openURL(url);
+    } catch {
+      alert({ title: 'No email app found', message: `Please email us at ${SUPPORT_EMAIL} from your email app.` });
     }
   };
 
@@ -113,8 +120,7 @@ export default function Profile() {
         />
         <ArrowCard title="Ankveda Premium" subtitle={premiumSubtitle} onPress={() => router.push('/paywall')} />
         <ArrowCard title="Invoices" subtitle="Tax invoices for your trial and subscription" onPress={() => router.push('/invoices')} />
-        <ArrowCard title="Purchases & reports" subtitle="Your access and saved readings" onPress={() => router.navigate('/reports')} />
-        <ArrowCard title={restoring ? 'Restoring…' : 'Restore purchases'} subtitle="Reconnect your existing access" onPress={restore} />
+        <ArrowCard title="Help & support" subtitle="Facing an issue? Write to us" onPress={() => void openSupport()} />
       </View>
 
       <View style={styles.account}>

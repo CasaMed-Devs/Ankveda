@@ -76,7 +76,7 @@ export default function RootLayout() {
             <Stack.Screen name="report/[id]/unlock" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="report/[id]/preview" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="report/[id]/processing" options={{ gestureEnabled: false }} />
-            <Stack.Screen name="astrologer" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="astrologer/[id]" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="profile-details" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="invoices/index" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="invoices/[id]" options={{ animation: 'slide_from_right' }} />

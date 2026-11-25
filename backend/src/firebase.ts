@@ -18,6 +18,7 @@ const secrets = {
   jwt: defineSecret('JWT_SECRET'),
   openaiKey: defineSecret('OPENAI_API_KEY'),
   astrologyKey: defineSecret('ASTROLOGY_API_KEY'),
+  personaKey: defineSecret('PERSONA_API_KEY'),
   voicensmsKey: defineSecret('VOICENSMS_API_KEY'),
   razorpayKeyId: defineSecret('RAZORPAY_KEY_ID'),
   razorpayKeySecret: defineSecret('RAZORPAY_KEY_SECRET'),
@@ -27,7 +28,8 @@ const secrets = {
 const app = createApp();
 
 /** REST API used by the mobile app and the admin page. */
-export const api = onRequest({ secrets: Object.values(secrets), timeoutSeconds: 60, memory: '512MiB' }, app);
+// 300s (same as Vercel): a permanent user deletion recursively deletes chat history and payment records.
+export const api = onRequest({ secrets: Object.values(secrets), timeoutSeconds: 300, memory: '512MiB' }, app);
 
 /**
  * Generates a report when it enters "processing" (created by a premium user, unlocked or retried).

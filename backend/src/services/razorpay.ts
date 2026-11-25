@@ -33,16 +33,19 @@ export const createRazorpayPlan = async (plan: Pick<PlanDoc, 'name' | 'descripti
  * Auto-renewing subscription. A trial is modelled as:
  *   - first recurring charge delayed by `trialDays` (start_at), and
  *   - an optional upfront add-on charged at authorisation (the trial price, e.g. ₹49).
+ * `withTrial: false` (trial already used by this account) → no delay and no add-on: the first
+ * monthly charge is taken at authorisation.
  */
 export const createRazorpaySubscription = async (args: {
   plan: PlanDoc;
   planId: string;
   uid: string;
   phone: string;
+  withTrial: boolean;
 }) => {
   // Effective terms: a trial switched off in the admin dashboard is not applied.
   const plan = { ...args.plan, ...effectiveTerms(args.plan) };
-  const hasTrial = plan.trialDays > 0;
+  const hasTrial = args.withTrial && plan.trialDays > 0;
   const subscription = await getClient().subscriptions.create({
     plan_id: plan.razorpayPlanId,
     total_count: TOTAL_COUNT[plan.period],

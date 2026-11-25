@@ -32,5 +32,9 @@ export const publicUser = (userId: string, user: UserDoc) => ({
   phone: user.phone,
   fullName: user.profile?.fullName || undefined,
   dob: user.profile?.dob || undefined,
+  birthTime: user.profile?.birthTime || undefined,
+  birthPlace: user.profile?.birthPlace || undefined,
   entitlement: computeEntitlement(user.entitlement),
+  /** False once this account has used the trial — the paywall then shows the plan without it. */
+  trialEligible: !user.trialUsedAt,
 });

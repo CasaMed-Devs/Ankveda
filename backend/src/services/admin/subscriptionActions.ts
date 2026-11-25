@@ -130,7 +130,7 @@ export const grantSubscription = async (userId: string, input: GrantInput, actor
       cancelAtPeriodEnd: false,
       source: 'admin_grant',
     };
-    tx.set(userRef, usersRepo.entitlementWrite(entitlement), { merge: true });
+    tx.set(userRef, { ...usersRepo.entitlementWrite(entitlement), ...usersRepo.subscriptionLinkWrite(subRef.id) }, { merge: true });
     audit.inTx(
       tx,
       {

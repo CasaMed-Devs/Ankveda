@@ -176,11 +176,19 @@ export const useExpire = (userId?: string) => {
 export const useDeleteUser = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (userId: string) =>
-      api<{ deletion: { status: string; deleted: { subscriptions: number; transactions: number; paymentsInPaise: number } } }>('DELETE', `/admin/users/${userId}`, {
-        body: { confirm: userId },
+    // Confirmation goes in the query string too: some proxies drop DELETE bodies.
+    mutationFn: ({ userId, force = false }: { userId: string; force?: boolean }) =>
+      api<{
+        deletion: {
+          status: string;
+          deleted: { subscriptions: number; transactions: number; paymentsInPaise: number };
+          billingNotStopped: string[];
+        };
+      }>('DELETE', `/admin/users/${encodeURIComponent(userId)}`, {
+        query: { confirm: userId, force },
+        body: { confirm: userId, force },
       }),
-    onSuccess: (_data, userId) => {
+    onSuccess: (_data, { userId }) => {
       qc.removeQueries({ queryKey: k('user', userId) });
       invalidateBilling(qc);
     },

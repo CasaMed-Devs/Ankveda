@@ -6,7 +6,6 @@ import { ARCHETYPES, birthNumber, lifePath, nameNumber, parseDob, personalDay } 
 /**
  * astrologyapi.com client.
  *  - Numerology: POST https://json.astrologyapi.com/v1/<endpoint> with { day, month, year, name }.
- *  - Chat:       POST https://json-chat.astrologyapi.com/api/chat (Astro Chat API).
  * Auth: access token in the `x-astrologyapi-key` header (or Basic userId:apiKey for legacy plan keys).
  * Numerology responses are passed to OpenAI as context, so we keep them as loose records.
  */
@@ -16,7 +15,6 @@ export type AstroRecord = Record<string, unknown>;
 type BirthInput = { dob: string; name: string };
 
 const TIMEOUT_MS = 15_000;
-const CHAT_TIMEOUT_MS = 50_000;
 
 const authHeaders = (astro: NonNullable<typeof config.astrology>): Record<string, string> =>
   astro.userId
@@ -48,18 +46,6 @@ const postJson = async (url: string, body: Record<string, unknown>, timeoutMs: n
 
 const post = (endpoint: string, body: Record<string, unknown>) =>
   postJson(`${config.astrology?.baseUrl}/${endpoint}`, body, TIMEOUT_MS);
-
-export type AstroChatRequest = {
-  name: string;
-  dob: string;
-  question: string;
-  sessionId?: string;
-};
-
-export type AstroChatResponse = { text: string; sessionId?: string };
-
-// The app doesn't collect birth time/place yet; the chart uses these neutral defaults (see README).
-const CHAT_DEFAULTS = { hour: 12, min: 0, place: 'New Delhi', lat: '28.61', lon: '77.21', tzone: '5.5', country: 'INDIA' };
 
 const birthBody = ({ dob, name }: BirthInput) => {
   const { day, month, year } = parseDob(dob);
@@ -106,36 +92,24 @@ export const astrologyApi = {
   numeroFavTime: (input: BirthInput) =>
     withFallback('numero_fav_time', () => post('numero_fav_time', birthBody(input)), () => ({ source: 'local-mock' })),
 
-  /** Daily numerology prediction for today. */
+  /** Daily numerology prediction for today (falls back to the local personal-day number). */
   dailyPrediction: (input: BirthInput) =>
     withFallback(
       'numero_prediction/daily',
       () => post('numero_prediction/daily', birthBody(input)),
-      () => ({ source: 'local-mock', lucky_number: personalDay(input.dob, new Date()) }),
+      // Today in India (06:00 IST), not the server's UTC date.
+      () => ({ source: 'local-mock', lucky_number: personalDay(input.dob, new Date(`${istDateKey()}T06:00:00+05:30`)) }),
     ),
 
-  /** Astro Chat API — Vedic AI astrologer. Reuse `sessionId` to continue the same conversation. */
-  chat: async ({ name, dob, question, sessionId }: AstroChatRequest): Promise<AstroChatResponse> => {
-    const { day, month, year } = parseDob(dob);
-    const data = await postJson(
-      config.astrology!.chatUrl,
-      {
-        language: 'en',
-        name,
-        day,
-        month,
-        year,
-        ...CHAT_DEFAULTS,
-        ap: 'KUNDLI',
-        sid: sessionId ?? '',
-        ep: 'STANDARD',
-        ac: 'VEDIC',
-        q: question,
-      },
-      CHAT_TIMEOUT_MS,
-    );
-    const text = typeof data.response === 'string' ? data.response.trim() : '';
-    if (data.success === false || !text) throw new Error(`Astro Chat returned no answer: ${JSON.stringify(data).slice(0, 200)}`);
-    return { text, sessionId: typeof data.session_id === 'string' ? data.session_id : sessionId };
+  /**
+   * Strict variants for daily guidance: the real API or an error — never local stand-ins, so a report
+   * is only ever saved from astrologyapi.com data.
+   */
+  strict: {
+    numeroTable: (input: BirthInput) => post('numero_table', birthBody(input)),
+    dailyPrediction: (input: BirthInput) => post('numero_prediction/daily', birthBody(input)),
   },
 };
+
+/** YYYY-MM-DD in India. */
+const istDateKey = () => new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10);

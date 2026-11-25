@@ -6,12 +6,12 @@ import {
   activationTimeFor,
   capPeriodEnd,
   mergeTransaction,
+  shouldReplaceEntitlement,
   subscriptionStateFromRazorpay,
   transactionKindOf,
   type RazorpayPaymentLike,
   type RazorpaySubscriptionLike,
 } from './billingRules';
-import { computeEntitlement } from './entitlement';
 import { issueInvoiceIfPaid } from './invoice';
 import { subscriptionIdForInvoice } from './razorpay';
 
@@ -61,16 +61,6 @@ export const syncSubscription = async (entity: RazorpaySubscriptionEntity, sourc
       lastEvent: { name: source.event, receivedAt: now },
       updatedAt: now,
     };
-    tx.set(subRef, nextSub);
-    if (stored.status !== nextSub.status || source.razorpayEventId) {
-      tx.create(refs.subscriptionEvents(entity.id).doc(), {
-        event: source.event,
-        fromStatus: stored.status,
-        toStatus: nextSub.status,
-        razorpayEventId: source.razorpayEventId ?? null,
-        receivedAt: now,
-      });
-    }
 
     const entitlement: StoredEntitlement = {
       status: nextSub.status,
@@ -81,11 +71,52 @@ export const syncSubscription = async (entity: RazorpaySubscriptionEntity, sourc
       cancelAtPeriodEnd,
       source: 'razorpay',
     };
-    // Don't let an old/other subscription overwrite a newer active one.
-    const current = user.entitlement?.subscriptionId;
-    const replace = !current || current === entity.id || !computeEntitlement(user.entitlement).active;
-    if (replace) tx.set(userRef, usersRepo.entitlementWrite(entitlement), { merge: true });
-    return replace ? ({ ...user, entitlement } as UserDoc) : user;
+    // Don't let an old/other subscription overwrite a newer active one; a paid re-purchase (the user's
+    // latest checkout) does take over from a cancelled-but-still-running one.
+    const current = user.entitlement?.subscriptionId ?? null;
+    const replace = shouldReplaceEntitlement({
+      current: user.entitlement,
+      incomingId: entity.id,
+      incomingStatus: nextSub.status,
+      latestSubscriptionId: user.latestSubscriptionId,
+    });
+    const takesOverFrom = replace && current && current !== entity.id ? current : null;
+
+    // Trial is once per account: remember the first time one was used.
+    const trialStarted = nextSub.planSnapshot.trialDays > 0 && !!nextSub.subscriptionActivatedAt && !user.trialUsedAt;
+    const userPatch: Partial<UserDoc> = {
+      ...(replace ? usersRepo.entitlementWrite(entitlement) : {}),
+      ...(trialStarted ? { trialUsedAt: nextSub.subscriptionActivatedAt, updatedAt: now } : {}),
+    };
+
+    if (takesOverFrom) {
+      const oldRef = refs.subscriptions().doc(takesOverFrom);
+      const old = (await tx.get(oldRef)).data();
+      if (old) {
+        tx.set(oldRef, { ...old, replacedBySubscriptionId: entity.id, updatedAt: now });
+        tx.create(refs.subscriptionEvents(takesOverFrom).doc(), {
+          event: 'replaced_by_new_subscription',
+          fromStatus: old.status,
+          toStatus: old.status,
+          razorpayEventId: null,
+          receivedAt: now,
+        });
+      }
+      nextSub.replacesSubscriptionId = takesOverFrom;
+    }
+
+    tx.set(subRef, nextSub);
+    if (stored.status !== nextSub.status || source.razorpayEventId) {
+      tx.create(refs.subscriptionEvents(entity.id).doc(), {
+        event: source.event,
+        fromStatus: stored.status,
+        toStatus: nextSub.status,
+        razorpayEventId: source.razorpayEventId ?? null,
+        receivedAt: now,
+      });
+    }
+    if (Object.keys(userPatch).length) tx.set(userRef, userPatch, { merge: true });
+    return { ...user, ...userPatch } as UserDoc;
   });
 };
 
