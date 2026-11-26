@@ -14,7 +14,8 @@ import { dateTime, istKey, number, pctChange, rupees } from '@/lib/format';
 import { fetchTransactions, useOverview, usePagedList } from '@/lib/queries';
 import type { TransactionRow } from '@/lib/types';
 
-const KIND = { trial: 'Trial', first_charge: 'First charge', renewal: 'Renewal' } as const;
+const KIND = { trial: 'Trial', mandate_auth: 'Autopay setup', first_charge: 'First charge', renewal: 'Renewal' } as const;
+const VIA = { polling: 'via polling', webhook: 'via webhook' } as const;
 
 export const PaymentsPage = () => {
   const [params, setParams] = useSearchParams();
@@ -40,7 +41,10 @@ export const PaymentsPage = () => {
       cell: (t) => (
         <div className="min-w-0">
           <CopyText value={t.razorpayPaymentId} className="max-w-44" />
-          <p className="text-[11px] text-ink-3">{KIND[t.kind]}</p>
+          <p className="text-[11px] text-ink-3">
+            {KIND[t.kind]} · {t.gateway}
+            {t.confirmedVia ? ` · ${VIA[t.confirmedVia]}` : ''}
+          </p>
         </div>
       ),
     },
@@ -64,6 +68,11 @@ export const PaymentsPage = () => {
         <div>
           <p className="font-semibold text-ink">{rupees(t.amountInPaise)}</p>
           {t.refundedAmountInPaise > 0 && <p className="text-[11px] text-ink-3">−{rupees(t.refundedAmountInPaise)} refunded</p>}
+          {t.priceMismatch && t.expectedPriceInPaise !== null && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400" title="Differs from the price this subscription is locked to">
+              expected {rupees(t.expectedPriceInPaise)}
+            </p>
+          )}
         </div>
       ),
     },

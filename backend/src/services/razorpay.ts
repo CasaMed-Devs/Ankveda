@@ -35,6 +35,12 @@ export const createRazorpayPlan = async (plan: Pick<PlanDoc, 'name' | 'descripti
  *   - an optional upfront add-on charged at authorisation (the trial price, e.g. ₹49).
  * `withTrial: false` (trial already used by this account) → no delay and no add-on: the first
  * monthly charge is taken at authorisation.
+ * `startAt` (ms, no trial): the first charge is deferred to that time. Used when a user who cancelled
+ * during the trial buys again: billing starts when the trial they paid for ends. Razorpay only takes a
+ * refundable autopay authorisation at checkout.
+ *
+ * The subscription is bound to plan.razorpayPlanId for its whole life, so its price is locked: a later
+ * admin price change (a new Razorpay plan) never changes what this subscription renews at.
  */
 export const createRazorpaySubscription = async (args: {
   plan: PlanDoc;
@@ -42,16 +48,22 @@ export const createRazorpaySubscription = async (args: {
   uid: string;
   phone: string;
   withTrial: boolean;
+  startAt?: number | null;
 }) => {
   // Effective terms: a trial switched off in the admin dashboard is not applied.
   const plan = { ...args.plan, ...effectiveTerms(args.plan) };
   const hasTrial = args.withTrial && plan.trialDays > 0;
+  const startAtSeconds = hasTrial
+    ? Math.floor(Date.now() / 1000) + plan.trialDays * 86_400
+    : args.startAt
+      ? Math.floor(args.startAt / 1000)
+      : null;
   const subscription = await getClient().subscriptions.create({
     plan_id: plan.razorpayPlanId,
     total_count: TOTAL_COUNT[plan.period],
     quantity: 1,
     customer_notify: 1,
-    ...(hasTrial ? { start_at: Math.floor(Date.now() / 1000) + plan.trialDays * 86_400 } : {}),
+    ...(startAtSeconds ? { start_at: startAtSeconds } : {}),
     ...(hasTrial && plan.trialPriceInPaise > 0
       ? { addons: [{ item: { name: `${plan.trialDays} day trial`, amount: plan.trialPriceInPaise, currency: 'INR' } }] }
       : {}),
@@ -77,6 +89,16 @@ export const fetchRazorpayPlan = async (id: string) => {
 export const fetchRazorpaySubscription = (id: string) => getClient().subscriptions.fetch(id);
 
 export const fetchRazorpayPayment = (id: string) => getClient().payments.fetch(id);
+
+/**
+ * Payment ids of a subscription's most recent invoices (Razorpay raises one invoice per charge, including
+ * the checkout payment). Used by polling when the app could not pass the payment id.
+ */
+export const fetchSubscriptionPaymentIds = async (subscriptionId: string, count = 3): Promise<string[]> => {
+  const page = await getClient().invoices.all({ subscription_id: subscriptionId, count } as Parameters<Razorpay['invoices']['all']>[0]);
+  const items = ((page as { items?: { payment_id?: string | null }[] }).items ?? []) as { payment_id?: string | null }[];
+  return items.map((i) => i.payment_id).filter((id): id is string => !!id);
+};
 
 /** Subscription payments carry an invoice id; the invoice names the subscription. */
 export const subscriptionIdForInvoice = async (invoiceId: string) =>

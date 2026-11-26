@@ -4,17 +4,21 @@
  *
  *  - Trial on/off, trial days and trial amount: edited IN PLACE. The trial is applied when a subscription
  *    is created (start_at delay + add-on), not stored in the Razorpay plan, so no Razorpay plan id is needed.
- *  - Monthly amount: Razorpay plans are immutable. A new amount needs a new Razorpay plan — either created
- *    here through the Razorpay API, or an existing plan id that is fetched and validated. A new featured
- *    plan document is written and the old one archived. Existing subscribers keep their original terms
- *    (subscriptions.planSnapshot); only new checkouts use the new plan.
+ *  - Monthly amount: Razorpay plans are immutable. A new amount needs a new Razorpay plan id, entered by the
+ *    admin as-is (not checked against Razorpay — transactions flag priceMismatch if a charge differs from
+ *    the locked price). A new featured plan document is written and the old one archived.
+ *
+ * Price lock (grandfathering): every Razorpay subscription stays bound to the plan it was bought on, so a
+ * change here never touches existing subscribers — paying users AND users in a trial keep renewing at their
+ * locked terms (subscriptions.lockedPriceInPaise / planSnapshot). Only new checkouts, including a user who
+ * cancelled and buys again, get the new plan.
  */
 import { db, refs } from '../../db/firestore';
 import type { PlanWithId } from '../../db/repositories/billing';
 import { HttpError } from '../../lib/http';
 import { SCHEMA_VERSION, type AdminActor, type PlanDoc } from '../../types';
 import { effectiveTerms } from '../billingRules';
-import { createRazorpayPlan, fetchRazorpayPlan, razorpayConfigured } from '../razorpay';
+import { createRazorpayPlan, razorpayConfigured } from '../razorpay';
 import { audit } from './audit';
 
 export type PriceChange =
@@ -109,19 +113,16 @@ export const updatePricing = async (input: PricingInput, actor: AdminActor) => {
   } else if (input.price.mode === 'existing') {
     const id = input.price.razorpayPlanId.trim();
     if (!/^plan_[A-Za-z0-9]+$/.test(id)) throw new HttpError(400, 'Enter a Razorpay plan id like plan_XXXXXXXX.', 'validation');
-    if (!razorpayConfigured()) throw new HttpError(503, 'Razorpay keys are not configured on the server — the plan cannot be verified.', 'payments_unconfigured');
-    const rp = await fetchRazorpayPlan(id).catch(() => {
-      throw new HttpError(400, `Razorpay has no plan ${id} on this account.`, 'validation');
-    });
-    if (rp.currency !== 'INR') throw new HttpError(400, `Razorpay plan ${id} is in ${rp.currency}, not INR.`, 'validation');
-    if (rp.period !== period || rp.interval !== interval) {
-      throw new HttpError(400, `Razorpay plan ${id} bills every ${rp.interval} ${rp.period}; the paywall plan bills every ${interval} ${period}.`, 'validation');
+    // The plan id changes only together with the price, and a new price always needs a new plan.
+    // The id is stored as the admin entered it (not looked up in Razorpay).
+    if (current && input.price.priceInPaise === current.priceInPaise) {
+      throw new HttpError(400, 'The monthly amount is unchanged — the Razorpay plan can only be replaced when the price changes.', 'validation');
     }
-    if (rp.amountInPaise !== input.price.priceInPaise) {
-      throw new HttpError(400, `Razorpay plan ${id} charges ₹${rp.amountInPaise / 100}, not ₹${input.price.priceInPaise / 100}. Razorpay plan amounts cannot be edited.`, 'validation');
+    if (current && id === current.razorpayPlanId) {
+      throw new HttpError(400, 'A new price needs a new Razorpay plan ID — this is the current plan.', 'validation');
     }
     razorpayPlanId = id;
-    priceInPaise = rp.amountInPaise;
+    priceInPaise = input.price.priceInPaise;
   }
 
   // 2. Firestore, atomically with the audit entry.

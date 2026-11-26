@@ -125,9 +125,14 @@ export function describeInvoice(type: InvoiceType, plan: Pick<SubscriptionDoc['p
   return `${plan.name} (${plan.interval === 1 ? `1 ${one}` : `${plan.interval} ${many}`})`;
 }
 
-/** Whether a payment is billed at all (users additionally never see fully refunded ones). */
-export const isInvoiceable = (t: Pick<TransactionDoc, 'status' | 'amountInPaise'>, includeRefunded = false) =>
-  t.amountInPaise > 0 && (includeRefunded ? BILLED.includes(t.status) : t.status === 'captured' || t.status === 'partially_refunded');
+/**
+ * Whether a payment is billed at all (users additionally never see fully refunded ones).
+ * An autopay authorisation (mandate_auth) is not a sale: it is refunded by Razorpay and never invoiced.
+ */
+export const isInvoiceable = (t: Pick<TransactionDoc, 'status' | 'amountInPaise'> & { kind?: TransactionDoc['kind'] }, includeRefunded = false) =>
+  t.amountInPaise > 0 &&
+  t.kind !== 'mandate_auth' &&
+  (includeRefunded ? BILLED.includes(t.status) : t.status === 'captured' || t.status === 'partially_refunded');
 
 /**
  * The service period an invoice covers.

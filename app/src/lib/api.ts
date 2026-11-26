@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   ChatPage,
   CheckoutSession,
+  CheckoutState,
   ConversationSummary,
   Daily,
   HomeSummary,
@@ -76,7 +77,13 @@ export const api = {
   featuredPlan: () => request<{ plan: Plan | null }>('GET', '/plans/featured'),
   createSubscription: (planId: string) => request<CheckoutSession>('POST', '/subscriptions', { planId }),
   verifySubscription: (payload: { paymentId: string; subscriptionId: string; signature: string }) =>
-    request<{ user: User }>('POST', '/subscriptions/verify', payload),
+    request<{ state: CheckoutState; user: User }>('POST', '/subscriptions/verify', payload),
+  /** Polls the checkout live from Razorpay (the webhook is only the fallback). */
+  subscriptionStatus: (subscriptionId: string, paymentId?: string | null) =>
+    request<{ state: CheckoutState; user: User }>(
+      'GET',
+      `/subscriptions/${encodeURIComponent(subscriptionId)}/status${paymentId ? `?paymentId=${encodeURIComponent(paymentId)}` : ''}`,
+    ),
   restorePurchases: () => request<{ user: User; restored: boolean }>('POST', '/subscriptions/restore'),
   cancelSubscription: () => request<{ user: User }>('POST', '/subscriptions/cancel'),
 

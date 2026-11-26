@@ -1,10 +1,12 @@
 import { refs, db } from '../db/firestore';
 import { usersRepo } from '../db/repositories/users';
 import { logger } from '../lib/logger';
-import { SCHEMA_VERSION, type StoredEntitlement, type SubscriptionDoc, type UserDoc } from '../types';
+import { SCHEMA_VERSION, type PaymentSyncSource, type StoredEntitlement, type SubscriptionDoc, type UserDoc } from '../types';
 import {
   activationTimeFor,
   capPeriodEnd,
+  expectedAmountOf,
+  isStaleSubscriptionUpdate,
   mergeTransaction,
   shouldReplaceEntitlement,
   subscriptionStateFromRazorpay,
@@ -35,6 +37,12 @@ export const syncSubscription = async (entity: RazorpaySubscriptionEntity, sourc
     const userRef = refs.user(stored.userId);
     const user = (await tx.get(userRef)).data();
     if (!user) return null;
+
+    // Webhooks can arrive out of order: never let an older snapshot move the subscription backwards.
+    if (isStaleSubscriptionUpdate(stored, entity, source.event)) {
+      logger.info('Ignoring out-of-order subscription update', { id: entity.id, event: source.event, stored: stored.status, incoming: entity.status });
+      return user;
+    }
 
     const state = subscriptionStateFromRazorpay(entity);
     const now = Date.now();
@@ -160,15 +168,22 @@ export const resolveSubscriptionId = async (payment: RazorpayPaymentLike & { sub
 /**
  * Upserts transactions/{razorpayPaymentId} for a subscription payment. Idempotent and order-safe:
  * keyed by the payment id, and statuses never move backwards.
+ * `source` says which path saw it: 'polling' (the app asked right after checkout, primary) or 'webhook'
+ * (Razorpay push: the fallback, and the only path for renewals). The first path to see the payment
+ * settle is kept as confirmedVia. Returns the stored status (null when the subscription is unknown).
  */
-export const recordTransaction = async (payment: RazorpayPaymentLike, subscriptionId: string) => {
+export const recordTransaction = async (
+  payment: RazorpayPaymentLike,
+  subscriptionId: string,
+  opts: { source: PaymentSyncSource },
+) => {
   const subRef = refs.subscriptions().doc(subscriptionId);
   const txRef = refs.transactions().doc(payment.id);
-  await db.runTransaction(async (tx) => {
+  const status = await db.runTransaction(async (tx) => {
     const sub = (await tx.get(subRef)).data();
     if (!sub) {
       logger.warn('Payment for a subscription Ankveda does not know', { paymentId: payment.id, subscriptionId });
-      return;
+      return null;
     }
     const existing = (await tx.get(txRef)).data() ?? null;
     const firstCharges = await tx.get(
@@ -176,12 +191,24 @@ export const recordTransaction = async (payment: RazorpayPaymentLike, subscripti
     );
     const hasCapturedFirstCharge = firstCharges.docs.some((d) => d.id !== payment.id);
     const now = Date.now();
+    const kind = existing?.kind ?? transactionKindOf(payment, sub, hasCapturedFirstCharge);
     const data = mergeTransaction(existing, payment, {
       userId: sub.userId,
       subscriptionId,
       planId: sub.planId,
-      kind: transactionKindOf(payment, sub, hasCapturedFirstCharge),
+      kind,
+      source: opts.source,
+      expectedPriceInPaise: expectedAmountOf(kind, sub),
     });
+    if (data.priceMismatch && !existing?.priceMismatch) {
+      logger.warn('Payment amount differs from the locked price', {
+        paymentId: payment.id,
+        subscriptionId,
+        amountInPaise: data.amountInPaise,
+        expectedPriceInPaise: data.expectedPriceInPaise,
+        razorpayPlanId: sub.razorpayPlanId,
+      });
+    }
     tx.set(txRef, {
       ...data,
       // The invoice number is issued once and must survive every later webhook (e.g. a refund).
@@ -191,7 +218,9 @@ export const recordTransaction = async (payment: RazorpayPaymentLike, subscripti
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });
+    return data.status;
   });
   // A captured payment gets its tax invoice number as soon as it is paid (idempotent).
-  await issueInvoiceIfPaid(payment.id);
+  if (status) await issueInvoiceIfPaid(payment.id);
+  return status;
 };

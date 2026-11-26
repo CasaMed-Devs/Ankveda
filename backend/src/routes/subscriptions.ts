@@ -1,4 +1,5 @@
 import type { Request } from 'express';
+import type { TransactionStatus } from '../types';
 import { Router } from 'express';
 import { z } from 'zod';
 
@@ -16,9 +17,12 @@ import {
 } from '../services/billing';
 import {
   canStartCheckout,
+  checkoutStateOf,
   checkoutTerms,
+  deferredStartFor,
   reusablePendingCheckout,
   trialAllowed,
+  type CheckoutState,
   type RazorpayPaymentLike,
 } from '../services/billingRules';
 import { isPremiumUser, publicUser } from '../services/entitlement';
@@ -27,6 +31,7 @@ import {
   createRazorpaySubscription,
   fetchRazorpayPayment,
   fetchRazorpaySubscription,
+  fetchSubscriptionPaymentIds,
   publicKeyId,
   verifyCheckoutSignature,
   verifyWebhookSignature,
@@ -41,6 +46,10 @@ export const subscriptionsRouter = Router();
  *    NEW subscription id that takes over access once paid; blocked while renewing or on complimentary access
  *  - the trial is offered once per account (users.trialUsedAt)
  *  - an unpaid checkout for the same plan/terms is reopened instead of creating another Razorpay subscription
+ *  - price lock: the new subscription is bound to the CURRENT featured plan for life; existing subscribers
+ *    (and users in a trial) stay on the plan they bought, whatever the admin changes later
+ *  - re-purchase after cancelling during the trial: the new price, billed from the end of that trial
+ *    (the user keeps the trial days they paid for)
  * The subscription is linked to the user (latestSubscriptionId / subscriptionIds) before checkout opens.
  */
 subscriptionsRouter.post(
@@ -56,10 +65,18 @@ subscriptionsRouter.post(
 
     const withTrial = trialAllowed(termsOf(plan), user.trialUsedAt);
     const terms = checkoutTerms(termsOf(plan), withTrial);
+    // Cancelled during the trial and buying again before it ends → first charge when that trial ends.
+    const current = user.entitlement?.subscriptionId ? await subscriptionsRepo.get(user.entitlement.subscriptionId) : null;
+    const deferredStartAt = withTrial ? null : deferredStartFor(current);
 
-    let subscriptionId = await reopenPendingCheckout(user.latestSubscriptionId, planId, withTrial);
+    let subscriptionId = await reopenPendingCheckout(user.latestSubscriptionId, {
+      planId,
+      withTrial,
+      terms,
+      deferredStartAt,
+    });
     if (!subscriptionId) {
-      const subscription = await createRazorpaySubscription({ plan, planId, uid, phone: user.phone, withTrial });
+      const subscription = await createRazorpaySubscription({ plan, planId, uid, phone: user.phone, withTrial, startAt: deferredStartAt });
       await subscriptionsRepo.createPending({
         subscriptionId: subscription.id,
         userId: uid,
@@ -67,25 +84,33 @@ subscriptionsRouter.post(
         totalCount: subscription.total_count,
         startAt: subscription.start_at ? subscription.start_at * 1000 : null,
         withTrial,
+        deferredStartAt,
       });
       subscriptionId = subscription.id;
     }
 
+    const billingFrom = deferredStartAt ? new Date(deferredStartAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) : null;
     res.json({
       keyId: publicKeyId(),
       subscriptionId,
       planName: plan.name,
-      description: terms.trialDays > 0 ? `${terms.trialDays} day trial · ${plan.name}` : plan.name,
+      description:
+        terms.trialDays > 0 ? `${terms.trialDays} day trial · ${plan.name}` : billingFrom ? `${plan.name} · billing from ${billingFrom}` : plan.name,
       phone: `+91${user.phone}`,
+      /** Set when the first charge is deferred to the end of a cancelled trial. */
+      billingStartsAt: deferredStartAt,
     });
   }),
 );
 
 /** The user's latest unpaid checkout, if it can be reopened (same plan and terms, recent, still unpaid in Razorpay). */
-const reopenPendingCheckout = async (latestSubscriptionId: string | null | undefined, planId: string, withTrial: boolean) => {
+const reopenPendingCheckout = async (
+  latestSubscriptionId: string | null | undefined,
+  want: Parameters<typeof reusablePendingCheckout>[1],
+) => {
   if (!latestSubscriptionId) return null;
   const pending = await subscriptionsRepo.get(latestSubscriptionId);
-  if (!reusablePendingCheckout(pending, { planId, withTrial })) return null;
+  if (!reusablePendingCheckout(pending, want)) return null;
   try {
     const live = await fetchRazorpaySubscription(latestSubscriptionId);
     return live.status === 'created' ? latestSubscriptionId : null;
@@ -95,6 +120,64 @@ const reopenPendingCheckout = async (latestSubscriptionId: string | null | undef
   }
 };
 
+// ── Payment confirmation: polling first, webhook as fallback ─────────────────────
+
+/** Polls of one subscription hit Razorpay at most this often (per instance); repeats get the last answer. */
+const POLL_MIN_INTERVAL_MS = 2_000;
+const lastPoll = new Map<string, { at: number; state: CheckoutState }>();
+
+/**
+ * Fetches the checkout live from Razorpay and records it: the subscription (status, entitlement) and its
+ * payments, tagged source 'polling'. The webhook records the same objects later (idempotent) and is
+ * what completes the purchase when the app stops polling.
+ * `trustedPaymentId`: a payment id whose link to this subscription is proven (checkout signature).
+ * `hintPaymentId`: an unverified id from the app — only used when Razorpay says it belongs to this subscription.
+ */
+const pollCheckout = async (
+  subscriptionId: string,
+  opts: { trustedPaymentId?: string; hintPaymentId?: string | null; force?: boolean },
+): Promise<CheckoutState> => {
+  const cached = lastPoll.get(subscriptionId);
+  if (!opts.force && cached && Date.now() - cached.at < POLL_MIN_INTERVAL_MS) return cached.state;
+
+  const live = await fetchRazorpaySubscription(subscriptionId);
+  await syncSubscription(live as RazorpaySubscriptionEntity, { event: 'poll' });
+
+  let paymentStatus: TransactionStatus | null = null;
+  const record = async (paymentId: string, verified: boolean) => {
+    try {
+      const payment = (await fetchRazorpayPayment(paymentId)) as RazorpayPaymentLike & { subscription_id?: string | null };
+      if (!verified && (await resolveSubscriptionId(payment)) !== subscriptionId) {
+        logger.warn('Polled payment does not belong to this subscription', { paymentId, subscriptionId });
+        return;
+      }
+      const status = await recordTransaction(payment, subscriptionId, { source: 'polling' });
+      paymentStatus ??= status;
+    } catch (error) {
+      logger.warn('Polling: payment not recorded yet (webhook will retry)', { paymentId, subscriptionId, error });
+    }
+  };
+
+  if (opts.trustedPaymentId) await record(opts.trustedPaymentId, true);
+  else if (opts.hintPaymentId) await record(opts.hintPaymentId, false);
+  else {
+    const ids = await fetchSubscriptionPaymentIds(subscriptionId).catch((error: unknown) => {
+      logger.warn('Polling: could not list subscription payments', { subscriptionId, error });
+      return [] as string[];
+    });
+    for (const id of ids) await record(id, true); // listed by Razorpay under this subscription
+  }
+
+  const state = checkoutStateOf(live.status, paymentStatus);
+  if (lastPoll.size > 1_000) lastPoll.clear();
+  lastPoll.set(subscriptionId, { at: Date.now(), state });
+  return state;
+};
+
+/**
+ * Called by the app as soon as Razorpay Checkout returns success. Checks the checkout signature, then
+ * runs the first poll. Returns `state`: 'pending' tells the app to keep polling GET /subscriptions/:id/status.
+ */
 subscriptionsRouter.post(
   '/subscriptions/verify',
   handle(async (req, res) => {
@@ -109,14 +192,27 @@ subscriptionsRouter.post(
     const stored = await subscriptionsRepo.get(body.subscriptionId);
     if (!stored || stored.userId !== uid) throw new HttpError(403, 'This subscription belongs to another account.', 'forbidden');
 
-    await syncSubscription(await fetchRazorpaySubscription(body.subscriptionId), { event: 'checkout.verified' });
-    // Record the checkout payment now (trial amount / first charge); webhooks later keep it up to date.
-    try {
-      await recordTransaction((await fetchRazorpayPayment(body.paymentId)) as RazorpayPaymentLike, body.subscriptionId);
-    } catch (error) {
-      logger.warn('Checkout payment not recorded yet (webhook will retry)', { paymentId: body.paymentId, error });
-    }
-    res.json({ user: publicUser(uid, await loadUser(uid)) });
+    const state = await pollCheckout(body.subscriptionId, { trustedPaymentId: body.paymentId, force: true });
+    res.json({ state, user: publicUser(uid, await loadUser(uid)) });
+  }),
+);
+
+/**
+ * Polling endpoint: the app calls it every few seconds after checkout until `state` is not 'pending'
+ * (also when Checkout returned an error or the app was interrupted — the payment may still have gone
+ * through). Owner only. `paymentId` (optional) is the id Checkout returned, if any.
+ */
+subscriptionsRouter.get(
+  '/subscriptions/:id/status',
+  handle(async (req, res) => {
+    const uid = uidOf(req);
+    const subscriptionId = String(req.params.id);
+    const hint = typeof req.query.paymentId === 'string' && /^pay_[A-Za-z0-9]+$/.test(req.query.paymentId) ? req.query.paymentId : null;
+    const stored = await subscriptionsRepo.get(subscriptionId);
+    if (!stored || stored.userId !== uid) throw new HttpError(404, 'Subscription not found.', 'not_found');
+    if (stored.source === 'admin_grant') throw new HttpError(400, 'Complimentary access has no payment.', 'complimentary');
+    const state = await pollCheckout(subscriptionId, { hintPaymentId: hint });
+    res.json({ state, user: publicUser(uid, await loadUser(uid)) });
   }),
 );
 
@@ -179,10 +275,12 @@ const rawBodyOf = (req: Request) => {
 };
 
 /**
- * Razorpay webhook → <api>/webhooks/razorpay. Subscribe to:
+ * Razorpay webhook → <api>/webhooks/razorpay. The FALLBACK for checkouts (the app polls first) and the
+ * only path for renewals, failed renewals and refunds. Subscribe to:
  *   subscription.authenticated / activated / charged / pending / halted / cancelled / completed / paused / resumed
  *   payment.authorized / captured / failed, refund.created / processed
- * Every delivery is recorded once (webhookEvents), then:
+ * Every event is claimed in webhookEvents (only a fully processed event is a duplicate, so a delivery that
+ * failed is processed again on Razorpay's retry), then:
  *   subscription.* → subscriptions/{id} (+ events history, user entitlement)
  *   payments       → transactions/{paymentId}
  *   refunds        → the refunded transaction is re-read from Razorpay
@@ -202,19 +300,29 @@ webhookRouter.post(
     const refund = body.payload?.refund?.entity;
 
     const eventId = req.header('x-razorpay-event-id') ?? null;
-    if (eventId && !(await webhookEventsRepo.recordOnce(eventId, event, subscription?.id ?? payment?.id ?? refund?.payment_id ?? null))) {
-      res.json({ ok: true, duplicate: true });
-      return;
+    if (eventId) {
+      const claim = await webhookEventsRepo.claim(eventId, event, subscription?.id ?? payment?.id ?? refund?.payment_id ?? null);
+      if (claim === 'done') {
+        res.json({ ok: true, duplicate: true });
+        return;
+      }
+      // Another delivery of this event is being handled right now: a non-2xx makes Razorpay retry later.
+      if (claim === 'in_progress') throw new HttpError(409, 'Event is being processed', 'in_progress');
     }
 
-    if (subscription?.id) await syncSubscription(subscription, { event, razorpayEventId: eventId });
+    try {
+      if (subscription?.id) await syncSubscription(subscription, { event, razorpayEventId: eventId });
 
-    // Refund events carry the refund; re-read the payment so the transaction shows the refunded amount.
-    if (!payment && refund?.payment_id) payment = (await fetchRazorpayPayment(refund.payment_id)) as RazorpayPaymentLike;
-    if (payment?.id) {
-      const subscriptionId = await resolveSubscriptionId(payment, subscription?.id);
-      if (subscriptionId) await recordTransaction(payment, subscriptionId);
-      else logger.info('Payment is not part of a subscription, ignored', { paymentId: payment.id, event });
+      // Refund events carry the refund; re-read the payment so the transaction shows the refunded amount.
+      if (!payment && refund?.payment_id) payment = (await fetchRazorpayPayment(refund.payment_id)) as RazorpayPaymentLike;
+      if (payment?.id) {
+        const subscriptionId = await resolveSubscriptionId(payment, subscription?.id);
+        if (subscriptionId) await recordTransaction(payment, subscriptionId, { source: 'webhook' });
+        else logger.info('Payment is not part of a subscription, ignored', { paymentId: payment.id, event });
+      }
+    } catch (error) {
+      if (eventId) await webhookEventsRepo.release(eventId, error).catch(() => undefined);
+      throw error;
     }
 
     if (eventId) await webhookEventsRepo.markProcessed(eventId);

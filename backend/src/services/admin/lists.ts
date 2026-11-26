@@ -217,8 +217,11 @@ export const subscriptionRow = (id: string, s: SubscriptionDoc, user?: { name: s
   razorpayPlanId: s.razorpayPlanId ?? null,
   source: s.source ?? 'razorpay',
   type: s.source === 'admin_grant' ? 'complimentary' : s.status === 'authenticated' ? 'trial' : 'paid',
-  amountInPaise: s.planSnapshot.priceInPaise,
-  trialPriceInPaise: s.planSnapshot.trialPriceInPaise,
+  /** The price this subscription is locked to (renews at it whatever the current plan costs). */
+  amountInPaise: s.lockedPriceInPaise ?? s.planSnapshot.priceInPaise,
+  trialPriceInPaise: s.lockedTrialPriceInPaise ?? s.planSnapshot.trialPriceInPaise,
+  /** Re-purchase after a cancelled trial: first charge deferred to this time. */
+  deferredStartAt: s.deferredStartAt ?? null,
   trialDays: s.planSnapshot.trialDays,
   period: s.planSnapshot.period,
   interval: s.planSnapshot.interval,
@@ -300,6 +303,12 @@ export const transactionRow = (
   status: t.status,
   kind: t.kind,
   method: t.method,
+  gateway: t.gateway ?? 'razorpay',
+  /** How the backend learned the payment settled: app polling (primary) or the Razorpay webhook (fallback). */
+  confirmedVia: t.confirmedVia ?? null,
+  syncSources: t.syncSources ?? [],
+  expectedPriceInPaise: t.expectedPriceInPaise ?? null,
+  priceMismatch: t.priceMismatch ?? false,
   errorCode: t.errorCode,
   errorDescription: t.errorDescription,
   paymentCreatedAt: t.paymentCreatedAt,

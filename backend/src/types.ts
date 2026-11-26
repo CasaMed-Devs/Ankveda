@@ -290,6 +290,22 @@ export type SubscriptionDoc = Audited & {
   replacedBySubscriptionId?: string | null;
   /** … and, on the newer one, the subscription it took over from. */
   replacesSubscriptionId?: string | null;
+  /**
+   * Price lock (grandfathering): the terms this subscription was bought on. A later admin price change
+   * creates a new Razorpay plan; this subscription keeps renewing on lockedRazorpayPlanId at this price.
+   * Missing on older documents → planSnapshot / razorpayPlanId hold the same values.
+   */
+  lockedPriceInPaise?: number;
+  lockedTrialPriceInPaise?: number;
+  lockedTrialDays?: number;
+  lockedRazorpayPlanId?: string | null;
+  priceLockedAt?: number;
+  /**
+   * Re-purchase after cancelling a trial: billing starts when the cancelled trial would have ended (the
+   * user keeps the trial days they paid for). The only payment before then is Razorpay's refundable
+   * autopay authorisation (kind 'mandate_auth'). null/missing = billing starts at checkout or trial end.
+   */
+  deferredStartAt?: number | null;
 };
 
 /**
@@ -309,7 +325,22 @@ export type SubscriptionEventDoc = {
 };
 
 export type TransactionStatus = 'created' | 'authorized' | 'captured' | 'failed' | 'refunded' | 'partially_refunded';
-export type TransactionKind = 'trial' | 'first_charge' | 'renewal';
+/**
+ * trial        — the upfront trial amount
+ * mandate_auth — refundable autopay authorisation before a deferred first charge (no invoice)
+ * first_charge — the first recurring cycle; renewal — every later cycle
+ */
+export type TransactionKind = 'trial' | 'mandate_auth' | 'first_charge' | 'renewal';
+
+/** The payment gateway that processed a payment (only Razorpay today). */
+export type PaymentGateway = 'razorpay';
+
+/**
+ * How our backend learned about a payment:
+ *  polling — the app asked us right after checkout and we fetched it live from Razorpay (primary path)
+ *  webhook — Razorpay pushed it to us (fallback; the only path for renewals, which happen with no app open)
+ */
+export type PaymentSyncSource = 'polling' | 'webhook';
 
 /**
  * transactions/{razorpayPaymentId} — every payment attempt for a subscription (success, failure, refund).
@@ -339,6 +370,18 @@ export type TransactionDoc = Audited & {
   /** Tax invoice number ("ANK-YYYYMM-000001"), assigned once when the payment is captured. */
   invoiceNumber?: string;
   invoiceIssuedAt?: number;
+  /** Missing on older documents (= 'razorpay'). */
+  gateway?: PaymentGateway;
+  /** The path that first saw this payment settle (captured / failed / refunded). Set once. */
+  confirmedVia?: PaymentSyncSource | null;
+  /** Every path that has written this document. */
+  syncSources?: PaymentSyncSource[];
+  lastSyncedVia?: PaymentSyncSource;
+  lastSyncedAt?: number;
+  /** What this payment should be, from the subscription's locked price (null when not a priced charge). */
+  expectedPriceInPaise?: number | null;
+  /** amountInPaise differs from expectedPriceInPaise — grandfathering / plan id mistake to investigate. */
+  priceMismatch?: boolean;
 };
 
 /** counters/invoices_{YYYYMM} — last invoice sequence issued in that IST month. */
@@ -365,6 +408,12 @@ export type WebhookEventDoc = {
   entityId: string | null;
   receivedAt: number;
   processedAt: number | null;
+  /** Set while a delivery is being handled; cleared when it finishes or fails. Missing on older docs. */
+  processingStartedAt?: number | null;
+  /** Deliveries that tried to process this event. */
+  attempts?: number;
+  /** Message of the last processing failure. */
+  lastError?: string;
   expireAt: number;
 };
 

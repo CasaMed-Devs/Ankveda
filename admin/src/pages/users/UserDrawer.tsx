@@ -25,7 +25,7 @@ const Section = ({ title, children, action }: { title: string; children: ReactNo
   </Card>
 );
 
-const KIND = { trial: 'Trial charge', first_charge: 'First charge', renewal: 'Renewal' } as const;
+const KIND = { trial: 'Trial charge', mandate_auth: 'Autopay setup', first_charge: 'First charge', renewal: 'Renewal' } as const;
 
 /** Trial and paid-period dates from what Razorpay reported (never guessed). */
 const subscriptionFacts = (s: SubscriptionRow) => {
@@ -152,6 +152,7 @@ const PaymentsTab = ({ d }: { d: UserDetail }) =>
             <p className="text-[12px] text-ink-3">
               {KIND[t.kind]} · {dateTime(t.paymentCreatedAt)}
               {t.method ? ` · ${t.method}` : ''}
+              {t.confirmedVia ? ` · via ${t.confirmedVia}` : ''}
             </p>
             {t.errorDescription && <p className="text-[12px] text-red-700 dark:text-red-400">{t.errorDescription}</p>}
             <CopyText value={t.razorpayPaymentId} className="mt-0.5" />

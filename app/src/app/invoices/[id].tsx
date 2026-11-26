@@ -31,7 +31,11 @@ export default function InvoiceScreen() {
     setError(null);
     try {
       if (action === 'share') await shareInvoicePdf(invoice);
-      else if ((await downloadInvoicePdf(invoice)) === 'saved') toast.success(`Invoice ${invoice.invoiceNumber} saved as a PDF.`);
+      else {
+        const result = await downloadInvoicePdf(invoice);
+        if (result === 'downloaded') toast.success(`Invoice ${invoice.invoiceNumber} downloaded — find it in your Downloads folder.`);
+        else if (result === 'saved') toast.success(`Invoice ${invoice.invoiceNumber} saved as a PDF.`);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create the invoice PDF. Please try again.');
     } finally {

@@ -23,9 +23,7 @@ type Form = {
   trialPrice: string;
   monthlyPlanEnabled: boolean;
   monthlyPrice: string;
-  priceMode: 'create' | 'existing';
   razorpayPlanId: string;
-  relinkPlan: boolean;
 };
 
 const toForm = (p: PricingPlan | null): Form => ({
@@ -36,9 +34,7 @@ const toForm = (p: PricingPlan | null): Form => ({
   trialPrice: p ? String(p.trialPriceInPaise / 100) : '49',
   monthlyPlanEnabled: p?.monthlyPlanEnabled ?? true,
   monthlyPrice: p ? String(p.priceInPaise / 100) : '',
-  priceMode: 'create',
   razorpayPlanId: '',
-  relinkPlan: false,
 });
 
 const paise = (rupeeText: string) => Math.round(Number(rupeeText) * 100);
@@ -113,14 +109,25 @@ export const PricingPage = () => {
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
   const newPrice = paise(form.monthlyPrice || '0');
   const priceChanged = !plan || newPrice !== plan.priceInPaise;
-  const needsPlanId = (priceChanged && form.priceMode === 'existing') || (!priceChanged && form.relinkPlan);
+  const planId = form.razorpayPlanId.trim();
+
+  // Back at the current price → the new-plan box hides, so drop whatever was typed in it.
+  useEffect(() => {
+    if (!priceChanged) setForm((f) => (f.razorpayPlanId ? { ...f, razorpayPlanId: '' } : f));
+  }, [priceChanged]);
 
   const errors = {
     trialDays: form.trialEnabled && !(Number.isInteger(Number(form.trialDays)) && Number(form.trialDays) >= 1 && Number(form.trialDays) <= 90) ? 'Enter 1–90 days.' : null,
     trialPrice:
       form.trialEnabled && !(Number(form.trialPrice) === 0 || (Number(form.trialPrice) >= 1 && Number(form.trialPrice) <= 100000)) ? 'Enter ₹0 (free trial) or at least ₹1.' : null,
     monthlyPrice: !(Number(form.monthlyPrice) >= 1 && Number(form.monthlyPrice) <= 100000) ? 'Enter at least ₹1.' : null,
-    razorpayPlanId: needsPlanId && !/^plan_[A-Za-z0-9]+$/.test(form.razorpayPlanId.trim()) ? 'Enter a Razorpay plan id (plan_…).' : null,
+    razorpayPlanId: !priceChanged
+      ? null
+      : !/^plan_[A-Za-z0-9]+$/.test(planId)
+        ? 'Enter the new Razorpay plan ID (plan_…).'
+        : plan && planId === plan.razorpayPlanId
+          ? 'This is the current plan. A new price needs a new Razorpay plan ID.'
+          : null,
     name: form.name.trim().length < 2 ? 'Enter a plan name.' : null,
   };
   const invalid = Object.values(errors).some(Boolean);
@@ -133,13 +140,7 @@ export const PricingPage = () => {
     trialDays: form.trialEnabled ? Number(form.trialDays) : (plan?.trialDays ?? 0),
     trialPriceInPaise: form.trialEnabled ? paise(form.trialPrice) : (plan?.trialPriceInPaise ?? 0),
     monthlyPlanEnabled: form.monthlyPlanEnabled,
-    price: priceChanged
-      ? form.priceMode === 'create'
-        ? { mode: 'create', priceInPaise: newPrice }
-        : { mode: 'existing', priceInPaise: newPrice, razorpayPlanId: form.razorpayPlanId.trim() }
-      : form.relinkPlan
-        ? { mode: 'existing', priceInPaise: newPrice, razorpayPlanId: form.razorpayPlanId.trim() }
-        : { mode: 'unchanged' },
+    price: priceChanged ? { mode: 'existing', priceInPaise: newPrice, razorpayPlanId: planId } : { mode: 'unchanged' },
   });
 
   const submit = () =>
@@ -202,7 +203,7 @@ export const PricingPage = () => {
 
           <Section
             title="Monthly subscription"
-            description="Razorpay plan amounts cannot be edited. A new amount creates (or links) a new Razorpay plan; the old plan is archived and its subscribers are unaffected."
+            description="Price shown on the paywall. Changing the price needs a new Razorpay plan."
             badge={form.monthlyPlanEnabled ? <Badge tone="success">Enabled</Badge> : <Badge tone="warning">Disabled</Badge>}
           >
             <Switch
@@ -211,11 +212,20 @@ export const PricingPage = () => {
               label="Show the plan on the paywall"
               description="When disabled, the app shows “Premium plans are being prepared” and nobody can subscribe. Existing subscribers are unaffected."
             />
+            {plan && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-surface-2 px-4 py-3">
+                <div>
+                  <p className="text-[12px] text-ink-3">Current plan</p>
+                  <p className="text-[15px] font-semibold text-ink">{rupees(plan.priceInPaise)} / {periodLabel(plan.period, plan.interval)}</p>
+                </div>
+                <CopyText value={plan.razorpayPlanId} truncate={false} />
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Plan name" htmlFor="plan-name" error={errors.name}>
                 <Input id="plan-name" maxLength={60} value={form.name} onChange={(e) => set('name', e.target.value)} />
               </Field>
-              <Field label="Monthly amount (₹)" htmlFor="monthly-price" error={errors.monthlyPrice} hint={plan && priceChanged ? `Currently ${rupees(plan.priceInPaise)} — changing it needs a new Razorpay plan` : undefined}>
+              <Field label="Monthly amount (₹)" htmlFor="monthly-price" error={errors.monthlyPrice}>
                 <Input id="monthly-price" type="number" min={1} step="1" leading="₹" value={form.monthlyPrice} onChange={(e) => set('monthlyPrice', e.target.value)} aria-invalid={!!errors.monthlyPrice} />
               </Field>
             </div>
@@ -223,37 +233,30 @@ export const PricingPage = () => {
               <Textarea id="plan-desc" maxLength={200} value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="All reports, daily guidance & astrologer chat" />
             </Field>
 
-            <div className="rounded-xl border border-line bg-surface-2 p-4">
-              <p className="text-[13px] font-semibold">Razorpay plan</p>
-              {plan && <p className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-ink-3">Current: <CopyText value={plan.razorpayPlanId} truncate={false} /></p>}
-              {priceChanged ? (
-                <fieldset className="mt-3 flex flex-col gap-2">
-                  <legend className="sr-only">How to get the Razorpay plan for the new amount</legend>
-                  {[
-                    { v: 'create' as const, t: `Create a new Razorpay plan for ${rupees(newPrice)} / month`, d: 'Done for you through the Razorpay API when you save.' },
-                    { v: 'existing' as const, t: 'Use a plan I already created in Razorpay', d: 'Its amount, currency and billing period are checked against Razorpay before saving.' },
-                  ].map((o) => (
-                    <label key={o.v} className={cn('flex cursor-pointer gap-3 rounded-lg border bg-surface p-3', form.priceMode === o.v ? 'border-series-1' : 'border-line')}>
-                      <input type="radio" name="price-mode" className="mt-1 accent-primary" checked={form.priceMode === o.v} onChange={() => set('priceMode', o.v)} />
-                      <span>
-                        <span className="block text-[13px] font-semibold">{o.t}</span>
-                        <span className="block text-[12px] text-ink-3">{o.d}</span>
-                      </span>
-                    </label>
-                  ))}
-                </fieldset>
-              ) : (
-                <label className="mt-3 flex items-center gap-2 text-[13px]">
-                  <input type="checkbox" className="accent-primary" checked={form.relinkPlan} onChange={(e) => set('relinkPlan', e.target.checked)} />
-                  Link a different Razorpay plan with the same amount
-                </label>
-              )}
-              {needsPlanId && (
-                <Field label="Razorpay plan ID" htmlFor="rzp-plan" error={errors.razorpayPlanId} className="mt-3">
-                  <Input id="rzp-plan" value={form.razorpayPlanId} onChange={(e) => set('razorpayPlanId', e.target.value)} placeholder="plan_XXXXXXXXXXXX" spellCheck={false} />
+            {priceChanged && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/25 dark:bg-amber-500/10">
+                <p className="text-[13px] font-semibold text-amber-900 dark:text-amber-300">
+                  {plan ? <>New price {rupees(newPrice)} / month — add its Razorpay plan</> : 'Add the Razorpay plan for this price'}
+                </p>
+                <Field
+                  label="New Razorpay plan ID"
+                  htmlFor="rzp-plan"
+                  error={errors.razorpayPlanId}
+                  hint={`Create a ${rupees(newPrice)} / month plan in Razorpay → Subscriptions → Plans and paste its ID.${plan ? ' The old plan is archived.' : ''}`}
+                  className="mt-3"
+                >
+                  <Input
+                    id="rzp-plan"
+                    value={form.razorpayPlanId}
+                    onChange={(e) => set('razorpayPlanId', e.target.value)}
+                    placeholder="plan_XXXXXXXXXXXX"
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-invalid={!!errors.razorpayPlanId}
+                  />
                 </Field>
-              )}
-            </div>
+              </div>
+            )}
           </Section>
 
           <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface/95 px-5 py-3 shadow-[var(--shadow-pop)] backdrop-blur">
@@ -270,7 +273,7 @@ export const PricingPage = () => {
               <Button icon={RotateCcw} onClick={() => setForm(initial)} disabled={!dirty || save.isPending}>
                 Reset changes
               </Button>
-              <Button variant="primary" icon={Save} disabled={!dirty || invalid} loading={save.isPending} onClick={() => (priceChanged || form.relinkPlan ? setConfirming(true) : submit())}>
+              <Button variant="primary" icon={Save} disabled={!dirty || invalid} loading={save.isPending} onClick={() => (priceChanged ? setConfirming(true) : submit())}>
                 Save changes
               </Button>
             </div>
@@ -307,14 +310,11 @@ export const PricingPage = () => {
         }
       >
         <ul className="list-disc space-y-1.5 pl-5 text-[13px] text-ink-2">
-          {form.priceMode === 'create' && priceChanged ? (
-            <li>A new Razorpay plan for <strong>{rupees(newPrice)} / month</strong> will be created in your Razorpay account.</li>
-          ) : (
-            <li>
-              Razorpay plan <code>{form.razorpayPlanId}</code> will be verified ({rupees(newPrice)} / month) and linked.
-            </li>
-          )}
-          <li>New checkouts use it immediately. {plan && <>The current plan ({rupees(plan.priceInPaise)}) is archived.</>}</li>
+          <li>
+            New checkouts will use <code>{planId}</code> at <strong>{rupees(newPrice)} / month</strong>.
+          </li>
+          {plan && <li>The old plan <code>{plan.razorpayPlanId}</code> ({rupees(plan.priceInPaise)}) is archived.</li>}
+          <li>Make sure the Razorpay plan really charges {rupees(newPrice)} / month — it is saved as entered, not checked.</li>
           <li>Existing subscribers keep their current price — Razorpay subscriptions cannot change plans.</li>
         </ul>
         {save.error && <InlineAlert tone="danger" className="mt-4">{errorMessage(save.error)}</InlineAlert>}

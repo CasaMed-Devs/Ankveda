@@ -5,7 +5,11 @@ import type { StoredEntitlement } from '../types';
 import {
   activationTimeFor,
   canStartCheckout,
+  checkoutStateOf,
   checkoutTerms,
+  deferredStartFor,
+  expectedAmountOf,
+  isStaleSubscriptionUpdate,
   laterStatus,
   mergeTransaction,
   reusablePendingCheckout,
@@ -61,7 +65,7 @@ test('out-of-order webhooks never move a transaction backwards', () => {
 });
 
 test('merge keeps first-seen kind and timestamps, records failure reason', () => {
-  const link = { userId: 'u_1', subscriptionId: 'sub_1', planId: 'plan_1', kind: 'trial' as const };
+  const link = { userId: 'u_1', subscriptionId: 'sub_1', planId: 'plan_1', kind: 'trial' as const, source: 'webhook' as const, expectedPriceInPaise: 4900 };
   const failed = mergeTransaction(null, { id: 'pay_x', amount: 4900, currency: 'INR', status: 'failed', error_code: 'BAD_REQUEST_ERROR', error_description: 'Card declined', created_at: now }, link, 1000);
   assert.equal(failed.status, 'failed');
   assert.equal(failed.failedAt, 1000);
@@ -145,4 +149,115 @@ test('entitlement: a paid re-purchase takes over; late webhooks from the old sub
   assert.equal(shouldReplaceEntitlement({ current: onNew, incomingId: 'sub_new', incomingStatus: 'halted', latestSubscriptionId: 'sub_new' }, T), true);
   assert.equal(shouldReplaceEntitlement({ current: null, incomingId: 'sub_a', incomingStatus: 'created', latestSubscriptionId: null }, T), true);
   assert.equal(shouldReplaceEntitlement({ current: ent({ currentPeriodEnd: T - 1 }), incomingId: 'sub_b', incomingStatus: 'created', latestSubscriptionId: 'sub_b' }, T), true);
+});
+
+// ── Gateway / confirmation source ───────────────────────────────────────────────
+
+test('transactions record the gateway, the first path that confirmed them, and every path', () => {
+  const link = { userId: 'u_1', subscriptionId: 'sub_1', planId: 'plan_1', kind: 'first_charge' as const, expectedPriceInPaise: 29900 };
+  const pay = { id: 'pay_z', amount: 29900, currency: 'INR', created_at: now };
+  // Polling sees it authorized first (not settled yet), then captured.
+  const seen = mergeTransaction(null, { ...pay, status: 'authorized' }, { ...link, source: 'polling' }, 1000);
+  assert.equal(seen.gateway, 'razorpay');
+  assert.equal(seen.confirmedVia, null);
+  const polled = mergeTransaction({ ...seen, schemaVersion: 1, createdAt: 1000, updatedAt: 1000 }, { ...pay, status: 'captured' }, { ...link, source: 'polling' }, 2000);
+  assert.equal(polled.confirmedVia, 'polling');
+  // The webhook arrives later: confirmedVia stays, both sources are listed.
+  const hooked = mergeTransaction({ ...polled, schemaVersion: 1, createdAt: 1000, updatedAt: 2000 }, { ...pay, status: 'captured' }, { ...link, source: 'webhook' }, 3000);
+  assert.equal(hooked.confirmedVia, 'polling');
+  assert.deepEqual(hooked.syncSources, ['polling', 'webhook']);
+  assert.equal(hooked.lastSyncedVia, 'webhook');
+  // The app never polled: the webhook confirms it.
+  const onlyHook = mergeTransaction(null, { ...pay, status: 'captured' }, { ...link, source: 'webhook' }, 1000);
+  assert.equal(onlyHook.confirmedVia, 'webhook');
+});
+
+test('checkout poll state', () => {
+  assert.equal(checkoutStateOf('authenticated', 'captured'), 'confirmed');
+  assert.equal(checkoutStateOf('active', null), 'confirmed');
+  assert.equal(checkoutStateOf('created', 'failed'), 'failed');
+  assert.equal(checkoutStateOf('created', null), 'pending');
+  assert.equal(checkoutStateOf('created', 'captured'), 'pending');
+});
+
+// ── Price lock (grandfathering) ───────────────────────────────────────────────────
+
+test('price lock: charges are checked against the locked price, not the current plan', () => {
+  // Bought at ₹299 with a ₹49 trial; the admin has since moved new users to ₹399.
+  const snapshot = { name: 'P', priceInPaise: 29900, period: 'monthly' as const, interval: 1, trialDays: 5, trialPriceInPaise: 4900 };
+  const locked = { planSnapshot: snapshot, lockedPriceInPaise: 29900, lockedTrialPriceInPaise: 4900 };
+  assert.equal(expectedAmountOf('trial', locked), 4900);
+  assert.equal(expectedAmountOf('first_charge', locked), 29900);
+  assert.equal(expectedAmountOf('renewal', locked), 29900);
+  assert.equal(expectedAmountOf('mandate_auth', locked), null);
+  // Older documents without lock fields fall back to the snapshot; a free trial has no priced charge.
+  const legacy = { planSnapshot: { ...snapshot, trialPriceInPaise: 0 } };
+  assert.equal(expectedAmountOf('renewal', legacy), 29900);
+  assert.equal(expectedAmountOf('trial', legacy), null);
+
+  const link = { userId: 'u', subscriptionId: 's', planId: 'p', kind: 'renewal' as const, source: 'webhook' as const, expectedPriceInPaise: 29900 };
+  assert.equal(mergeTransaction(null, { id: 'p1', amount: 29900, currency: 'INR', status: 'captured' }, link).priceMismatch, false);
+  assert.equal(mergeTransaction(null, { id: 'p2', amount: 39900, currency: 'INR', status: 'captured' }, link).priceMismatch, true);
+});
+
+test('re-purchase after cancelling the trial: billing deferred to the old trial end', () => {
+  const trialEnd = T + 3 * 86_400_000;
+  const snapshot = { name: 'P', priceInPaise: 29900, period: 'monthly' as const, interval: 1, trialDays: 5, trialPriceInPaise: 4900 };
+  const cancelledTrial = {
+    status: 'cancelled' as const,
+    planSnapshot: snapshot,
+    paidCount: 0,
+    currentPeriodEnd: trialEnd,
+    source: 'razorpay' as const,
+    accessRevokedAt: null,
+  };
+  assert.equal(deferredStartFor(cancelledTrial, T), trialEnd);
+  // Trial already over, or almost over → bill now.
+  assert.equal(deferredStartFor({ ...cancelledTrial, currentPeriodEnd: T - 1 }, T), null);
+  assert.equal(deferredStartFor({ ...cancelledTrial, currentPeriodEnd: T + 5 * 60_000 }, T), null);
+  // A paid subscription cancelled at cycle end, a non-trial one, a grant, revoked access, or still in trial → bill now.
+  assert.equal(deferredStartFor({ ...cancelledTrial, paidCount: 1 }, T), null);
+  assert.equal(deferredStartFor({ ...cancelledTrial, planSnapshot: { ...snapshot, trialDays: 0 } }, T), null);
+  assert.equal(deferredStartFor({ ...cancelledTrial, source: 'admin_grant' as const }, T), null);
+  assert.equal(deferredStartFor({ ...cancelledTrial, accessRevokedAt: T - 1 }, T), null);
+  assert.equal(deferredStartFor({ ...cancelledTrial, status: 'authenticated' as const }, T), null);
+  assert.equal(deferredStartFor(null, T), null);
+
+  // Payments before the deferred start are the autopay authorisation; the charge at the start is the first charge.
+  const deferredSub = { startAt: trialEnd, deferredStartAt: trialEnd, planSnapshot: { trialDays: 0 } };
+  const sec = Math.floor(T / 1000);
+  assert.equal(transactionKindOf({ id: 'a', amount: 500, currency: 'INR', status: 'refunded', created_at: sec }, deferredSub, false), 'mandate_auth');
+  assert.equal(
+    transactionKindOf({ id: 'b', amount: 39900, currency: 'INR', status: 'captured', created_at: Math.floor(trialEnd / 1000) + 60 }, deferredSub, false),
+    'first_charge',
+  );
+});
+
+test('an unpaid checkout is not reopened after a price change or for a different deferred start', () => {
+  const pending = { status: 'created' as const, planId: 'p1', createdAt: T - 10 * 60_000, planSnapshot: { trialDays: 5, priceInPaise: 29900, trialPriceInPaise: 4900 } };
+  assert.equal(reusablePendingCheckout(pending, { planId: 'p1', withTrial: true, terms: { priceInPaise: 29900, trialPriceInPaise: 4900 } }, T), true);
+  // Trial amount edited in place by the admin.
+  assert.equal(reusablePendingCheckout(pending, { planId: 'p1', withTrial: true, terms: { priceInPaise: 29900, trialPriceInPaise: 9900 } }, T), false);
+  const deferred = { ...pending, planSnapshot: { ...pending.planSnapshot, trialDays: 0 }, deferredStartAt: T + 86_400_000 };
+  assert.equal(reusablePendingCheckout(deferred, { planId: 'p1', withTrial: false, deferredStartAt: T + 86_400_000 }, T), true);
+  assert.equal(reusablePendingCheckout(deferred, { planId: 'p1', withTrial: false, deferredStartAt: null }, T), false);
+});
+
+// ── Out-of-order subscription webhooks ──────────────────────────────────────────
+
+test('a late webhook cannot move a subscription backwards', () => {
+  const active = { status: 'active' as const, paidCount: 1, currentPeriodStart: (now + 5 * DAY) * 1000 };
+  // subscription.authenticated delivered after subscription.activated.
+  assert.equal(isStaleSubscriptionUpdate(active, { id: 's', status: 'authenticated', paid_count: 0 }, 'subscription.authenticated'), true);
+  // Normal moves.
+  assert.equal(isStaleSubscriptionUpdate(active, { id: 's', status: 'pending', paid_count: 1 }, 'subscription.pending'), false);
+  assert.equal(isStaleSubscriptionUpdate(active, { id: 's', status: 'cancelled', paid_count: 1 }, 'subscription.cancelled'), false);
+  // A cancelled trial is not revived by its delayed authenticated webhook…
+  const cancelled = { status: 'cancelled' as const, paidCount: 0, currentPeriodStart: null };
+  assert.equal(isStaleSubscriptionUpdate(cancelled, { id: 's', status: 'authenticated', paid_count: 0 }, 'subscription.authenticated'), true);
+  // …but a resume, or live data from polling / restore, always applies.
+  assert.equal(isStaleSubscriptionUpdate(cancelled, { id: 's', status: 'active', paid_count: 0 }, 'subscription.resumed'), false);
+  assert.equal(isStaleSubscriptionUpdate(cancelled, { id: 's', status: 'authenticated', paid_count: 0 }, 'poll'), false);
+  // A newer billing cycle is never stale.
+  assert.equal(isStaleSubscriptionUpdate(cancelled, { id: 's', status: 'active', paid_count: 1 }, 'subscription.charged'), false);
 });

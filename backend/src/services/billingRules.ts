@@ -1,7 +1,9 @@
 import type {
+  PaymentSyncSource,
   PlanDoc,
   PlanTerms,
   StoredEntitlement,
+  SubscriptionDoc,
   SubscriptionStatus,
   TransactionDoc,
   TransactionKind,
@@ -104,6 +106,8 @@ export const laterStatus = (current: TransactionStatus | undefined, next: Transa
 
 /**
  * trial        — the upfront trial amount, paid before the first recurring charge (start_at)
+ * mandate_auth — a re-purchase whose billing is deferred (deferredStartAt): Razorpay's refundable autopay
+ *                authorisation, taken before the first recurring charge
  * first_charge — the first recurring cycle (until one has been captured)
  * renewal      — every cycle after a captured first charge (including failed renewal attempts)
  * Uses the subscription's own transaction history rather than Razorpay's paid_count, which can
@@ -111,22 +115,53 @@ export const laterStatus = (current: TransactionStatus | undefined, next: Transa
  */
 export const transactionKindOf = (
   payment: RazorpayPaymentLike,
-  subscription: { startAt: number | null; planSnapshot: { trialDays: number } },
+  subscription: { startAt: number | null; planSnapshot: { trialDays: number }; deferredStartAt?: number | null },
   hasCapturedFirstCharge: boolean,
 ): TransactionKind => {
   const createdAt = ms(payment.created_at) ?? Date.now();
   if (subscription.planSnapshot.trialDays > 0 && subscription.startAt && createdAt < subscription.startAt) return 'trial';
+  const deferredUntil = subscription.deferredStartAt ? (subscription.startAt ?? subscription.deferredStartAt) : null;
+  if (deferredUntil && createdAt < deferredUntil) return 'mandate_auth';
   return hasCapturedFirstCharge ? 'renewal' : 'first_charge';
 };
+
+/**
+ * What a payment of this kind should cost under the subscription's locked price (grandfathering).
+ * null = not a priced charge: an autopay authorisation, or the authorisation of a free trial.
+ */
+export const expectedAmountOf = (
+  kind: TransactionKind,
+  sub: Pick<SubscriptionDoc, 'planSnapshot' | 'lockedPriceInPaise' | 'lockedTrialPriceInPaise'>,
+): number | null => {
+  if (kind === 'mandate_auth') return null;
+  if (kind === 'trial') {
+    const trialPrice = sub.lockedTrialPriceInPaise ?? sub.planSnapshot.trialPriceInPaise;
+    return trialPrice > 0 ? trialPrice : null;
+  }
+  return sub.lockedPriceInPaise ?? sub.planSnapshot.priceInPaise;
+};
+
+/** Statuses at which a payment is settled: the first path to see one is recorded as confirmedVia. */
+const SETTLED: TransactionStatus[] = ['captured', 'failed', 'partially_refunded', 'refunded'];
 
 /** Builds / merges a transactions/{paymentId} document from a Razorpay payment entity. */
 export const mergeTransaction = (
   existing: TransactionDoc | null,
   payment: RazorpayPaymentLike,
-  link: { userId: string; subscriptionId: string; planId: string; kind: TransactionKind },
+  link: {
+    userId: string;
+    subscriptionId: string;
+    planId: string;
+    kind: TransactionKind;
+    source: PaymentSyncSource;
+    /** expectedAmountOf() for this kind; the value already stored on the document wins. */
+    expectedPriceInPaise: number | null;
+  },
   now = Date.now(),
 ): Omit<TransactionDoc, 'schemaVersion' | 'createdAt' | 'updatedAt'> => {
   const status = laterStatus(existing?.status, transactionStatusOf(payment));
+  const expected = existing && existing.expectedPriceInPaise !== undefined ? existing.expectedPriceInPaise : link.expectedPriceInPaise;
+  const syncSources = existing?.syncSources ?? [];
   return {
     userId: link.userId,
     subscriptionId: link.subscriptionId,
@@ -146,7 +181,55 @@ export const mergeTransaction = (
     capturedAt: existing?.capturedAt ?? (status === 'captured' || status.endsWith('refunded') ? now : null),
     failedAt: existing?.failedAt ?? (status === 'failed' ? now : null),
     refundedAt: existing?.refundedAt ?? (status.endsWith('refunded') ? now : null),
+    gateway: 'razorpay',
+    confirmedVia: existing?.confirmedVia ?? (SETTLED.includes(status) ? link.source : null),
+    syncSources: syncSources.includes(link.source) ? syncSources : [...syncSources, link.source],
+    lastSyncedVia: link.source,
+    lastSyncedAt: now,
+    expectedPriceInPaise: expected,
+    priceMismatch: expected !== null && payment.amount !== expected,
   };
+};
+
+// ── Subscription ordering ───────────────────────────────────────────────────────
+
+/**
+ * Lifecycle order of a Razorpay subscription. Same-rank moves (active / pending / halted) are normal;
+ * cancelled / completed / expired are terminal.
+ */
+const SUBSCRIPTION_RANK: Record<SubscriptionStatus, number> = {
+  none: 0,
+  created: 0,
+  authenticated: 1,
+  active: 2,
+  pending: 2,
+  halted: 2,
+  cancelled: 3,
+  completed: 3,
+  expired: 3,
+};
+
+/** Events that carry live data fetched from Razorpay (not a possibly delayed webhook snapshot). */
+const LIVE_EVENTS = new Set(['checkout.verified', 'poll', 'restore', 'user.cancelled_trial', 'subscription.resumed']);
+
+/**
+ * Is this incoming subscription entity an out-of-order webhook (e.g. subscription.authenticated delivered
+ * after subscription.activated)? It is stale when it moves the lifecycle backwards without a newer
+ * billing cycle. Live fetches and resume events always apply.
+ */
+export const isStaleSubscriptionUpdate = (
+  stored: Pick<SubscriptionDoc, 'status' | 'paidCount' | 'currentPeriodStart'>,
+  incoming: RazorpaySubscriptionLike,
+  event: string,
+): boolean => {
+  if (LIVE_EVENTS.has(event)) return false;
+  const next = (incoming.status as SubscriptionStatus) ?? 'created';
+  const nextRank = SUBSCRIPTION_RANK[next] ?? 2;
+  const storedRank = SUBSCRIPTION_RANK[stored.status] ?? 2;
+  if (nextRank >= storedRank) return false;
+  const newerCycle =
+    (incoming.paid_count ?? 0) > (stored.paidCount ?? 0) || (ms(incoming.current_start) ?? 0) > (stored.currentPeriodStart ?? 0);
+  return !newerCycle;
 };
 
 // ── Admin rules ──────────────────────────────────────────────────────────────
@@ -223,15 +306,74 @@ export const REUSE_CHECKOUT_MS = 24 * 60 * 60_000;
 
 /** Can this unpaid checkout be reopened instead of creating a new Razorpay subscription? */
 export const reusablePendingCheckout = (
-  pending: { status: SubscriptionStatus; planId: string; createdAt: number; planSnapshot: Pick<PlanTerms, 'trialDays'>; source?: string } | null | undefined,
-  want: { planId: string; withTrial: boolean },
+  pending:
+    | {
+        status: SubscriptionStatus;
+        planId: string;
+        createdAt: number;
+        planSnapshot: Pick<PlanTerms, 'trialDays'> & Partial<Pick<PlanTerms, 'priceInPaise' | 'trialPriceInPaise'>>;
+        source?: string;
+        deferredStartAt?: number | null;
+      }
+    | null
+    | undefined,
+  want: {
+    planId: string;
+    withTrial: boolean;
+    /** The terms this checkout would get now: an unpaid checkout on older amounts is not reopened. */
+    terms?: Pick<PlanTerms, 'priceInPaise' | 'trialPriceInPaise'>;
+    deferredStartAt?: number | null;
+  },
   now = Date.now(),
 ): boolean => {
   if (!pending || pending.status !== 'created' || pending.source === 'admin_grant') return false;
   if (pending.planId !== want.planId) return false;
   if (pending.planSnapshot.trialDays > 0 !== want.withTrial) return false;
+  if (want.terms) {
+    const { priceInPaise, trialPriceInPaise } = pending.planSnapshot;
+    if (priceInPaise !== undefined && priceInPaise !== want.terms.priceInPaise) return false;
+    if (want.withTrial && trialPriceInPaise !== undefined && trialPriceInPaise !== want.terms.trialPriceInPaise) return false;
+  }
+  // A deferred-start checkout has its start_at fixed in Razorpay: reuse it only for the same start.
+  if ((pending.deferredStartAt ?? null) !== (want.deferredStartAt ?? null)) return false;
   const window = want.withTrial ? REUSE_TRIAL_CHECKOUT_MS : REUSE_CHECKOUT_MS;
   return now - pending.createdAt < window;
+};
+
+/**
+ * Result of polling a checkout:
+ *  confirmed — the subscription is authorised (trial / deferred start) or charged → Premium is on
+ *  failed    — the checkout payment failed and the subscription was never authorised
+ *  pending   — not settled yet (keep polling; the webhook completes it if the app gives up)
+ */
+export type CheckoutState = 'pending' | 'confirmed' | 'failed';
+
+export const checkoutStateOf = (subscriptionStatus: string, paymentStatus: TransactionStatus | null): CheckoutState => {
+  if (subscriptionStatus === 'authenticated' || subscriptionStatus === 'active') return 'confirmed';
+  if (subscriptionStatus === 'created' && paymentStatus === 'failed') return 'failed';
+  return 'pending';
+};
+
+/** Razorpay needs start_at in the future; leave room for the user to finish checkout. */
+export const MIN_DEFERRED_START_MS = 30 * 60_000;
+
+/**
+ * Re-purchase after cancelling during the trial: when should billing of the new subscription start?
+ * The user paid for the trial, so the new subscription's first charge waits until the cancelled trial
+ * would have ended, at the NEW price (the cancelled subscription's price lock ends with it).
+ * Returns that time, or null to bill immediately (no cancelled trial, or too little of it left).
+ */
+export const deferredStartFor = (
+  previous:
+    | Pick<SubscriptionDoc, 'status' | 'planSnapshot' | 'paidCount' | 'currentPeriodEnd' | 'source' | 'accessRevokedAt'>
+    | null
+    | undefined,
+  now = Date.now(),
+): number | null => {
+  if (!previous || previous.source === 'admin_grant' || previous.accessRevokedAt) return null;
+  if (previous.status !== 'cancelled' || previous.planSnapshot.trialDays <= 0 || previous.paidCount > 0) return null;
+  if (!previous.currentPeriodEnd || previous.currentPeriodEnd - now < MIN_DEFERRED_START_MS) return null;
+  return previous.currentPeriodEnd;
 };
 
 const GRANTS_ACCESS: SubscriptionStatus[] = ['authenticated', 'active'];

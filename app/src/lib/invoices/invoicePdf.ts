@@ -1,33 +1,28 @@
+import * as FileSystem from 'expo-file-system';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
-import type { File as FileSystemFile } from 'expo-file-system';
+
+import { canSaveToDownloads, saveToDownloads } from '../../../modules/invoice-downloads';
 
 import { buildInvoiceHtml, INVOICE_PAGE } from '@/lib/invoices/invoiceHtml';
 import type { Invoice } from '@/lib/types';
 
 const PDF_MIME_TYPE = 'application/pdf';
 
-export type InvoiceDownloadResult = 'saved' | 'shared' | 'cancelled';
+/** downloaded = in the phone's Downloads folder; saved = in a folder the user picked. */
+export type InvoiceDownloadResult = 'downloaded' | 'saved' | 'shared' | 'cancelled';
 
 export const invoiceFileName = (invoice: Invoice): string =>
   `${invoice.appName}-Invoice-${invoice.invoiceNumber}.pdf`.replace(/[^A-Za-z0-9._-]/g, '_');
 
-/**
- * Loaded lazily (like react-native-razorpay): an app binary built before these native modules were
- * added doesn't contain them, and a top-level import would crash the whole invoice screen instead of
- * just failing the download with a clear message.
+/*
+ * Static imports on purpose: a dynamic import() is a separate chunk that a dev build downloads from
+ * Metro when it runs, so with Metro unreachable both buttons failed. The native modules are in the binary.
  */
-const loadPdfModules = async () => {
-  try {
-    const [Print, Sharing, FileSystem] = await Promise.all([import('expo-print'), import('expo-sharing'), import('expo-file-system')]);
-    return { Print, Sharing, FileSystem };
-  } catch {
-    throw new Error('Please update the app to download invoices.');
-  }
-};
 
 /** Renders the invoice (same template as the admin dashboard) to an A4 PDF named after its number. */
-const createInvoicePdf = async (invoice: Invoice): Promise<FileSystemFile> => {
-  const { Print, FileSystem } = await loadPdfModules();
+const createInvoicePdf = async (invoice: Invoice): Promise<FileSystem.File> => {
   const { uri } = await Print.printToFileAsync({ html: buildInvoiceHtml(invoice), ...INVOICE_PAGE });
 
   // expo-print picks a random file name; give it the one the user should see.
@@ -39,25 +34,29 @@ const createInvoicePdf = async (invoice: Invoice): Promise<FileSystemFile> => {
 
 /** Opens the system share sheet with the invoice PDF attached. */
 export const shareInvoicePdf = async (invoice: Invoice): Promise<void> => {
-  const { Sharing } = await loadPdfModules();
   const pdf = await createInvoicePdf(invoice);
   if (!(await Sharing.isAvailableAsync())) throw new Error('Sharing is not available on this device.');
   await Sharing.shareAsync(pdf.uri, { mimeType: PDF_MIME_TYPE, UTI: 'com.adobe.pdf', dialogTitle: invoice.invoiceNumber });
 };
 
 /**
- * Android: saves the PDF to a folder the user picks. iOS: the share sheet, whose "Save to Files" is
- * the equivalent.
+ * Android 10+: saved straight into the phone's Downloads folder (no picker, no permission).
+ * Older Android: saved to a folder the user picks. iOS: the share sheet, whose "Save to Files" is the
+ * equivalent.
  */
 export const downloadInvoicePdf = async (invoice: Invoice): Promise<InvoiceDownloadResult> => {
   if (Platform.OS !== 'android') {
     await shareInvoicePdf(invoice);
     return 'shared';
   }
-  const { FileSystem } = await loadPdfModules();
   const pdf = await createInvoicePdf(invoice);
 
-  let folder: InstanceType<typeof FileSystem.Directory>;
+  if (canSaveToDownloads()) {
+    await saveToDownloads(pdf.uri, invoiceFileName(invoice), PDF_MIME_TYPE);
+    return 'downloaded';
+  }
+
+  let folder: FileSystem.Directory;
   try {
     folder = await FileSystem.Directory.pickDirectoryAsync();
   } catch {

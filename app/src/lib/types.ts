@@ -138,7 +138,12 @@ export type CheckoutSession = {
   planName: string;
   description: string;
   phone: string;
+  /** Re-purchase after a cancelled trial: the first charge is taken at this time (ms), not now. */
+  billingStartsAt?: number | null;
 };
+
+/** Result of checking a checkout: keep polling while 'pending'. */
+export type CheckoutState = 'pending' | 'confirmed' | 'failed';
 
 /**
  * GST tax invoice for one trial or subscription payment — mirrors backend/src/services/invoice.ts

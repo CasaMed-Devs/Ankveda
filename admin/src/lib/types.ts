@@ -80,8 +80,15 @@ export type TransactionRow = {
   feeInPaise: number | null;
   currency: string;
   status: TransactionStatus;
-  kind: 'trial' | 'first_charge' | 'renewal';
+  kind: 'trial' | 'mandate_auth' | 'first_charge' | 'renewal';
   method: string | null;
+  gateway: 'razorpay';
+  /** How the backend learned the payment settled: app polling (primary) or the Razorpay webhook (fallback). */
+  confirmedVia: 'polling' | 'webhook' | null;
+  syncSources: ('polling' | 'webhook')[];
+  /** The subscription locked price this charge should match (null for authorisations). */
+  expectedPriceInPaise: number | null;
+  priceMismatch: boolean;
   errorCode: string | null;
   errorDescription: string | null;
   paymentCreatedAt: number;

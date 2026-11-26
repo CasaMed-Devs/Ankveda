@@ -83,6 +83,8 @@ export const subscriptionsRepo = {
     totalCount: number;
     startAt: number | null;
     withTrial: boolean;
+    /** Billing deferred to the end of a cancelled trial (see deferredStartFor). */
+    deferredStartAt?: number | null;
   }) =>
     db.runTransaction(async (tx) => {
       const userRef = refs.user(args.userId);
@@ -91,11 +93,19 @@ export const subscriptionsRepo = {
       const planDoc = plan.data();
       if (!planDoc) throw new Error(`Plan ${args.planId} not found`);
       const now = Date.now();
+      const planSnapshot = checkoutTerms(termsOf(planDoc), args.withTrial);
       const doc: SubscriptionDoc = {
         schemaVersion: SCHEMA_VERSION,
         userId: args.userId,
         planId: args.planId,
-        planSnapshot: checkoutTerms(termsOf(planDoc), args.withTrial),
+        planSnapshot,
+        // Price lock: this subscription renews at these terms for life, whatever the admin sets later.
+        lockedPriceInPaise: planSnapshot.priceInPaise,
+        lockedTrialPriceInPaise: planSnapshot.trialPriceInPaise,
+        lockedTrialDays: planSnapshot.trialDays,
+        lockedRazorpayPlanId: planDoc.razorpayPlanId,
+        priceLockedAt: now,
+        deferredStartAt: args.deferredStartAt ?? null,
         razorpayPlanId: planDoc.razorpayPlanId,
         razorpayCustomerId: null,
         status: 'created',
