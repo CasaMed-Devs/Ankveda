@@ -7,6 +7,7 @@ import { PrimaryButton } from '@/components/Buttons';
 import { OtpInput } from '@/components/Fields';
 import { Heading } from '@/components/Heading';
 import { FooterNote, Screen } from '@/components/Screen';
+import { toast } from '@/components/Toast';
 import { api, ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { RESEND_SECONDS } from '@/lib/config';
@@ -54,6 +55,7 @@ export default function Verify() {
     try {
       const res = await api.requestOtp(phone);
       setHint(res.devCode ?? '');
+      if (res.delayed) toast.info('SMS is taking longer than usual. Enter the code when it arrives, or tap resend.');
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not resend the code.');
     }

@@ -62,7 +62,7 @@ const request = async <T>(method: Method, path: string, body?: unknown): Promise
 };
 
 export const api = {
-  requestOtp: (phone: string) => request<{ sent: boolean; devCode?: string }>('POST', '/auth/otp/request', { phone }),
+  requestOtp: (phone: string) => request<{ sent: boolean; delayed?: boolean; devCode?: string }>('POST', '/auth/otp/request', { phone }),
   verifyOtp: (phone: string, code: string) =>
     request<{ token: string; user: User }>('POST', '/auth/otp/verify', { phone, code }),
 

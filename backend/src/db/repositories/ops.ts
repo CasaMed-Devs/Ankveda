@@ -9,6 +9,21 @@ export const otpRepo = {
   save: (phone: string, challenge: OtpChallengeDoc) => refs.otpChallenges().doc(phone).set(challenge),
   recordFailedAttempt: (phone: string, attempts: number) =>
     refs.otpChallenges().doc(phone).set({ attempts } as Partial<OtpChallengeDoc>, { merge: true }),
+  /**
+   * Atomically checks the resend gap / daily limit and stores the new code BEFORE it is sent, so a
+   * slow SMS that arrives late still works and two quick taps cannot both send.
+   * Returns the previous challenge (to roll back if sending definitely fails) or throws the check's error.
+   */
+  issue: (phone: string, next: (existing: OtpChallengeDoc | null) => OtpChallengeDoc) =>
+    db.runTransaction(async (tx) => {
+      const ref = refs.otpChallenges().doc(phone);
+      const existing = (await tx.get(ref)).data() ?? null;
+      tx.set(ref, next(existing));
+      return existing;
+    }),
+  /** Undo issue() after the provider definitely rejected the SMS (nothing was sent). */
+  rollback: (phone: string, previous: OtpChallengeDoc | null) =>
+    previous ? refs.otpChallenges().doc(phone).set(previous) : refs.otpChallenges().doc(phone).delete(),
   /** Makes the code single-use while keeping the daily send counter (doc is TTL-deleted later). */
   consume: (phone: string) =>
     refs.otpChallenges().doc(phone).set({ codeHash: '', codeExpiresAt: 0, attempts: 0 } as Partial<OtpChallengeDoc>, { merge: true }),

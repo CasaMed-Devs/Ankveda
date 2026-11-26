@@ -7,6 +7,7 @@ import { PrimaryButton } from '@/components/Buttons';
 import { PhoneField } from '@/components/Fields';
 import { Heading } from '@/components/Heading';
 import { Screen } from '@/components/Screen';
+import { toast } from '@/components/Toast';
 import { api, ApiError } from '@/lib/api';
 import { LEGAL_URLS } from '@/lib/config';
 import { colors } from '@/theme/tokens';
@@ -25,7 +26,8 @@ export default function Login() {
     setError(undefined);
     setLoading(true);
     try {
-      const { devCode } = await api.requestOtp(phone);
+      const { devCode, delayed } = await api.requestOtp(phone);
+      if (delayed) toast.info('SMS is taking longer than usual. Enter the code when it arrives, or tap resend.');
       router.push({ pathname: '/verify', params: { phone, devCode: devCode ?? '' } });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not send the code. Please try again.');

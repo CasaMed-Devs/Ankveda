@@ -12,7 +12,7 @@ import { handle, HttpError, parseBody } from '../lib/http';
 import { logger } from '../lib/logger';
 import { todayIst } from '../services/daily';
 import { publicUser } from '../services/entitlement';
-import { sendOtpSms } from '../services/sms';
+import { sendOtpSms, SmsDelayedError } from '../services/sms';
 
 const CODE_TTL_MS = 5 * 60_000;
 const RESEND_AFTER_MS = 25_000;
@@ -20,22 +20,17 @@ const MAX_ATTEMPTS = 5;
 
 const phoneSchema = z.string().regex(/^[6-9]\d{9}$/, 'Enter a valid 10-digit mobile number.');
 
-type Delivery = { code: string; showInApp: boolean };
-
 /**
- * Chooses the code and delivers it:
+ * Chooses the code:
  *  - test numbers (OTP_TEST_NUMBERS): fixed code, no SMS (Play Store review / QA)
  *  - "dummy" mode: fixed DUMMY_OTP, shown in the app (local / staging without SMS)
  *  - "sms" mode: random 6-digit code sent with VoiceNSMS, never returned to the app
  */
-const deliverCode = async (phone: string): Promise<Delivery> => {
+const chooseCode = (phone: string): { code: string; sendSms: boolean; showInApp: boolean } => {
   const testCode = config.otpTestNumbers.get(phone);
-  if (testCode) return { code: testCode, showInApp: false };
-  if (config.otpMode === 'dummy') return { code: config.dummyOtp, showInApp: true };
-
-  const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
-  await sendOtpSms(phone, code);
-  return { code, showInApp: false };
+  if (testCode) return { code: testCode, sendSms: false, showInApp: false };
+  if (config.otpMode === 'dummy') return { code: config.dummyOtp, sendSms: false, showInApp: true };
+  return { code: String(randomInt(0, 1_000_000)).padStart(6, '0'), sendSms: true, showInApp: false };
 };
 
 export const authRouter = Router();
@@ -46,29 +41,47 @@ authRouter.post(
     const { phone } = parseBody(z.object({ phone: phoneSchema }), req.body);
     const now = Date.now();
     const today = todayIst();
-    const existing = await otpRepo.get(phone);
+    const { code, sendSms, showInApp } = chooseCode(phone);
 
-    if (existing && now - existing.lastSentAt < RESEND_AFTER_MS) {
-      throw new HttpError(429, 'Please wait a few seconds before requesting another code.', 'too_soon');
-    }
-    const sentToday = existing?.sendDay === today ? existing.sendCount : 0;
-    if (sentToday >= config.otpDailyLimit) {
-      throw new HttpError(429, 'Too many codes requested for this number today. Please try again tomorrow.', 'otp_daily_limit');
-    }
-
-    const { code, showInApp } = await deliverCode(phone);
-    await otpRepo.save(phone, {
-      codeHash: hashCode(phone, code),
-      attempts: 0,
-      lastSentAt: now,
-      codeExpiresAt: now + CODE_TTL_MS,
-      sendCount: sentToday + 1,
-      sendDay: today,
-      expireAt: now + DAY_MS,
+    // Checks and stores the code in one transaction, BEFORE sending: two quick taps cannot both send,
+    // and a slow SMS that arrives late still matches the stored code.
+    let sentToday = 0;
+    const previous = await otpRepo.issue(phone, (existing) => {
+      if (existing && now - existing.lastSentAt < RESEND_AFTER_MS) {
+        throw new HttpError(429, 'Please wait a few seconds before requesting another code.', 'too_soon');
+      }
+      sentToday = existing?.sendDay === today ? existing.sendCount : 0;
+      if (sentToday >= config.otpDailyLimit) {
+        throw new HttpError(429, 'Too many codes requested for this number today. Please try again tomorrow.', 'otp_daily_limit');
+      }
+      return {
+        codeHash: hashCode(phone, code),
+        attempts: 0,
+        lastSentAt: now,
+        codeExpiresAt: now + CODE_TTL_MS,
+        sendCount: sentToday + 1,
+        sendDay: today,
+        expireAt: now + DAY_MS,
+      };
     });
-    logger.info('Login code issued', { mode: config.otpMode, phoneLast4: phone.slice(-4), sentToday: sentToday + 1 });
 
-    res.json({ sent: true, ...(showInApp ? { devCode: code } : {}) });
+    let delayed = false;
+    if (sendSms) {
+      try {
+        await sendOtpSms(phone, code);
+      } catch (error) {
+        if (!(error instanceof SmsDelayedError)) {
+          // Definitely not sent: restore the previous state so the user can retry right away.
+          await otpRepo.rollback(phone, previous).catch((e: unknown) => logger.warn('OTP rollback failed', { error: e }));
+          throw error;
+        }
+        // The provider is slow: the code stays valid and the SMS may still arrive; the user can resend.
+        delayed = true;
+      }
+    }
+    logger.info('Login code issued', { mode: config.otpMode, phoneLast4: phone.slice(-4), sentToday: sentToday + 1, delayed });
+
+    res.json({ sent: true, ...(delayed ? { delayed: true } : {}), ...(showInApp ? { devCode: code } : {}) });
   }),
 );
 

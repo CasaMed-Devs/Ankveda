@@ -14,7 +14,18 @@ import { logger } from '../lib/logger';
  * The SMS text must match the DLT-approved template exactly; VOICENSMS_MESSAGE holds it with {otp}.
  */
 
-const TIMEOUT_MS = 15_000;
+/**
+ * VoiceNSMS normally answers in under 1.5 s. Past this we stop waiting — but the SMS may still be
+ * delivered late, so a timeout is reported as SmsDelayedError (the code stays valid), not a failure.
+ */
+const TIMEOUT_MS = 8_000;
+
+/** The provider did not answer in time: the SMS may or may not arrive. */
+export class SmsDelayedError extends Error {
+  constructor() {
+    super('SMS provider did not answer in time');
+  }
+}
 
 const fill = (template: string, values: Record<string, string>) =>
   template.replace(/\{(\w+)\}/g, (match, key: string) => (key in values ? encodeURIComponent(values[key]) : match));
@@ -47,6 +58,10 @@ export const sendOtpSms = async (phone: string, otp: string) => {
     status = response.status;
     body = (await response.text()).slice(0, 500);
   } catch (error) {
+    if (controller.signal.aborted) {
+      logger.warn('VoiceNSMS slow: no answer in time, the SMS may arrive late', { timeoutMs: TIMEOUT_MS, phoneLast4: phone.slice(-4) });
+      throw new SmsDelayedError();
+    }
     logger.error('VoiceNSMS request failed', { error: redact(String(error), [sms.apiKey, otp]) });
     throw new HttpError(502, 'We could not send the code right now. Please try again in a minute.', 'sms_failed');
   } finally {
