@@ -6,6 +6,8 @@ import type {
   Activity,
   AuditRow,
   DayStat,
+  MetaEventRow,
+  MetaEventSummary,
   Overview,
   Paged,
   PlanOption,
@@ -96,6 +98,12 @@ export const fetchTransactions = (args: TransactionFilters & { pageSize: number;
 export type AuditFilters = { action?: string; targetUserId?: string };
 export const fetchAudit = (args: AuditFilters & { pageSize: number; cursor: string | null }) =>
   api<Paged<AuditRow>>('GET', '/admin/audit', { query: args });
+
+export type MetaEventFilters = { event?: string; userId?: string };
+export const fetchMetaEvents = (args: MetaEventFilters & { pageSize: number; cursor: string | null }) =>
+  api<Paged<MetaEventRow>>('GET', '/admin/meta-events', { query: args });
+export const useMetaEventSummary = () =>
+  useQuery({ queryKey: k('meta-events-summary'), queryFn: () => api<MetaEventSummary>('GET', '/admin/meta-events/summary'), staleTime: 30_000 });
 
 // ── Single resources ─────────────────────────────────────────────────────────
 

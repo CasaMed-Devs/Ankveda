@@ -74,6 +74,14 @@ export const api = {
   home: () => request<HomeSummary>('GET', '/home'),
   daily: () => request<{ locked: boolean; daily?: Daily }>('GET', '/daily'),
 
+  /** Copy of a Meta event the app just logged (admin dashboard + server logs). Best-effort. */
+  trackEvent: (payload: {
+    event: string;
+    params?: Record<string, string | number>;
+    platform?: string;
+    appVersion?: string;
+    clientTime?: number;
+  }) => request<{ ok: true; duplicate: boolean }>('POST', '/analytics/events', payload),
   featuredPlan: () => request<{ plan: Plan | null }>('GET', '/plans/featured'),
   createSubscription: (planId: string) => request<CheckoutSession>('POST', '/subscriptions', { planId }),
   verifySubscription: (payload: { paymentId: string; subscriptionId: string; signature: string }) =>

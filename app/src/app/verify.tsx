@@ -8,6 +8,7 @@ import { OtpInput } from '@/components/Fields';
 import { Heading } from '@/components/Heading';
 import { FooterNote, Screen } from '@/components/Screen';
 import { toast } from '@/components/Toast';
+import { analytics } from '@/lib/analytics';
 import { api, ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { RESEND_SECONDS } from '@/lib/config';
@@ -40,6 +41,9 @@ export default function Verify() {
       // Setting the session unlocks the protected routes; the root screen then routes
       // to About you (new user) or Home without the splash delay.
       await useAuthStore.getState().setSession(token, user);
+      // After the session exists, so the event is also reported to our server. No name yet = a brand-new account.
+      if (user.fullName) analytics.logLogin();
+      else analytics.logCompleteRegistration();
       router.replace('/');
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'That code did not work. Please try again.');

@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
@@ -12,6 +12,7 @@ import { Screen } from '@/components/Screen';
 import { usePremiumCheckout } from '@/hooks/usePremiumCheckout';
 import { appAlert } from '@/components/AppAlert';
 import { toast } from '@/components/Toast';
+import { analytics } from '@/lib/analytics';
 import { api, ApiError } from '@/lib/api';
 import { describePlan } from '@/lib/plans';
 import { applyUser, useEntitlement, useFeaturedPlan } from '@/lib/queries';
@@ -33,6 +34,10 @@ export default function Paywall() {
   const { isPremium, entitlement } = useEntitlement();
   const { checkout, busy } = usePremiumCheckout(reportId);
   const [restoring, setRestoring] = useState(false);
+
+  useEffect(() => {
+    analytics.logViewContent('paywall');
+  }, []);
 
   const restore = async () => {
     setRestoring(true);

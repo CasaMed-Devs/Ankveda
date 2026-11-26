@@ -34,10 +34,11 @@ import { getOverview, getSeries, rebuildSeries } from '../services/admin/stats';
 import { adminExpire, grantSubscription } from '../services/admin/subscriptionActions';
 import { istDateStart, isDateKey } from '../services/admin/time';
 import { getUserDetail } from '../services/admin/userDetail';
+import { listMetaEvents, metaEventSummary } from '../services/metaEvents';
 import { getInvoice, listInvoices } from '../services/invoice';
 import { buildInvoiceHtml } from '../services/invoiceHtml';
 import { razorpayConfigured } from '../services/razorpay';
-import type { AuditAction } from '../types';
+import { META_EVENT_NAMES, type AuditAction } from '../types';
 
 export const adminRouter = Router();
 
@@ -367,6 +368,30 @@ adminRouter.get(
         targetUserId: str(q.targetUserId),
       }),
     );
+  }),
+);
+
+// ── Meta events (copies of what the app logged to Meta) ──────────────────────
+
+adminRouter.get(
+  '/admin/meta-events',
+  handle(async (req, res) => {
+    const q = req.query;
+    res.json(
+      await listMetaEvents({
+        pageSize: pageSizeOf(q.pageSize),
+        cursor: str(q.cursor),
+        event: oneOf(META_EVENT_NAMES, q.event),
+        userId: str(q.userId),
+      }),
+    );
+  }),
+);
+
+adminRouter.get(
+  '/admin/meta-events/summary',
+  handle(async (_req, res) => {
+    res.json(await metaEventSummary());
   }),
 );
 

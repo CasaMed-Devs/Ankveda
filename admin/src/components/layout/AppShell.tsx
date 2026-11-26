@@ -5,6 +5,7 @@ import {
   CreditCard,
   LayoutDashboard,
   LogOut,
+  Megaphone,
   Menu,
   Moon,
   Receipt,
@@ -39,6 +40,7 @@ export const NAV: NavItem[] = [
   { to: '/payments', label: 'Payments', icon: Receipt },
   { to: '/pricing', label: 'Paywall & Pricing', icon: Tags },
   { to: '/analytics', label: 'Analytics', icon: ChartColumn },
+  { to: '/meta-events', label: 'Meta Events', icon: Megaphone },
   { to: '/activity', label: 'Admin Activity', icon: ScrollText },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];

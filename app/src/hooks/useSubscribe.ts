@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { appAlert } from '@/components/AppAlert';
 import { toast } from '@/components/Toast';
+import { analytics } from '@/lib/analytics';
 import { api, ApiError } from '@/lib/api';
 import { applyUser } from '@/lib/queries';
 import type { CheckoutState, Plan, User } from '@/lib/types';
@@ -57,9 +58,14 @@ const pollCheckout = async (subscriptionId: string, paymentId: string | null, de
 export const useSubscribe = () => {
   const [busy, setBusy] = useState(false);
 
-  const finish = (user: User | null | undefined, state: CheckoutState | null) => {
+  const finish = (user: User | null | undefined, state: CheckoutState | null, purchase?: { plan: Plan; subscriptionId: string }) => {
     if (user) applyUser(user);
     if (user?.entitlement.active && state === 'confirmed') {
+      // Meta Purchase: what was charged today (the trial amount, else the first charge).
+      if (purchase) {
+        const paise = purchase.plan.trialDays > 0 ? purchase.plan.trialPriceInPaise : purchase.plan.priceInPaise;
+        analytics.logPurchase({ amount: paise / 100, planId: purchase.plan.id, subscriptionId: purchase.subscriptionId });
+      }
       toast.success('Welcome to Ankveda Premium!');
       return true;
     }
@@ -88,6 +94,10 @@ export const useSubscribe = () => {
     try {
       const session = await api.createSubscription(plan.id);
       subscriptionId = session.subscriptionId;
+      analytics.logInitiatedCheckout({
+        planId: plan.id,
+        amount: (plan.trialDays > 0 ? plan.trialPriceInPaise : plan.priceInPaise) / 100,
+      });
       const result = await Razorpay.open({
         key: session.keyId,
         subscription_id: session.subscriptionId,
@@ -110,7 +120,7 @@ export const useSubscribe = () => {
       if (!outcome || outcome.state === 'pending') {
         outcome = (await pollCheckout(verifiedId, paymentId, POLL_DELAYS_MS)) ?? outcome;
       }
-      return finish(outcome?.user, outcome?.state ?? 'pending');
+      return finish(outcome?.user, outcome?.state ?? 'pending', { plan, subscriptionId: verifiedId });
     } catch (error) {
       if (error instanceof ApiError) {
         appAlert({ title: 'Subscription', message: error.message });
@@ -121,7 +131,7 @@ export const useSubscribe = () => {
       // Checkout reported an error or cancel, but the money may still have moved: ask before giving up.
       if (subscriptionId) {
         const outcome = await pollCheckout(subscriptionId, null, cancelled ? CANCEL_CHECK_DELAYS_MS : POLL_DELAYS_MS);
-        if (outcome?.state === 'confirmed') return finish(outcome.user, 'confirmed');
+        if (outcome?.state === 'confirmed') return finish(outcome.user, 'confirmed', { plan, subscriptionId });
       }
       if (!cancelled) {
         appAlert({ title: 'Payment not completed', message: failure.description ?? 'Your payment did not go through. Please try again.' });

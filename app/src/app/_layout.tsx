@@ -20,6 +20,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AlertProvider } from '@/components/AppAlert';
 import { ToastProvider } from '@/components/Toast';
+import { analytics } from '@/lib/analytics';
 import { useAuthStore } from '@/lib/auth-store';
 import { queryClient } from '@/lib/queries';
 import { colors } from '@/theme/tokens';
@@ -38,6 +39,7 @@ export default function RootLayout() {
   const ready = serifLoaded && sansLoaded && hydrated;
 
   useEffect(() => {
+    analytics.init();
     void useAuthStore.getState().hydrate();
   }, []);
 

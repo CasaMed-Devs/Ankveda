@@ -43,6 +43,7 @@ Code: types in `backend/src/types.ts`, typed refs in `backend/src/db/firestore.t
 | `adminAuditLog` | auto (`login_{uid}_{authTime}` for logins) | Append-only admin audit: `action`, `actor {uid,email}`, `targetUserId`, `subscriptionId`, `planId`, `details`. Written only by the backend, in the same transaction as the change. Entries from before admin accounts have no `actor` | `targetUserId` → users, `planId` → plans |
 | `adminStats/overview` | `overview` | Cached dashboard figures (aggregation queries, recomputed after 5 min) | — |
 | `adminDailyStats` | `YYYY-MM` (IST) | `days.{DD}`: registrations, net revenue, payments, failed payments, subscriptions started, grants. A day is final 3 days after it ends; newer days refresh every 10 min | — |
+| `metaEvents` | auto (`Purchase_{subscriptionId}` for purchases) | Copy of each Meta event the app logged (CompleteRegistration, Login, ViewContent, InitiatedCheckout, Purchase) for the admin *Meta Events* page and logs. Shows the app fired it, not that Meta accepted it (TTL 90 days) | `userId` → users |
 | `userDeletions` | user id | Resumable permanent-deletion job: steps done, counts deleted, last error. Holds the phone only until the job completes | `userId` (deleted) |
 
 ### Admin fields (all optional — documents written before the admin dashboard stay valid)

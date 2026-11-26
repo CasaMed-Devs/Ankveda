@@ -4,6 +4,7 @@ import { config } from '../config';
 import { requireUser } from '../lib/auth';
 import { errorHandler } from '../lib/http';
 import { adminRouter } from '../routes/admin';
+import { analyticsRouter } from '../routes/analytics';
 import { authRouter } from '../routes/auth';
 import { chatRouter } from '../routes/chat';
 import { invoicesRouter } from '../routes/invoices';
@@ -61,7 +62,7 @@ export const createApp = () => {
   api.use(webhookRouter);
   api.use(adminRouter);
   api.use(plansRouter);
-  api.use(requireUser, meRouter, subscriptionsRouter, reportsRouter, chatRouter, invoicesRouter);
+  api.use(requireUser, analyticsRouter, meRouter, subscriptionsRouter, reportsRouter, chatRouter, invoicesRouter);
 
   // Works with and without an "/api" prefix (Vercel rewrite, Firebase Hosting rewrite, direct function URL).
   app.use('/api', api);

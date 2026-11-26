@@ -217,3 +217,24 @@ export type SystemInfo = {
   razorpayKeyMode: 'live' | 'test' | null;
   reportRunner: string;
 };
+
+export type MetaEventName = 'CompleteRegistration' | 'Login' | 'ViewContent' | 'InitiatedCheckout' | 'Purchase';
+
+export type MetaEventRow = {
+  id: string;
+  event: MetaEventName;
+  userId: string;
+  value: number | null;
+  currency: string | null;
+  planId: string | null;
+  subscriptionId: string | null;
+  params: Record<string, unknown>;
+  platform: string | null;
+  appVersion: string | null;
+  createdAt: number;
+};
+
+export type MetaEventSummary = {
+  events: { event: MetaEventName; last24h: number; last7d: number; last30d: number }[];
+  note: string;
+};

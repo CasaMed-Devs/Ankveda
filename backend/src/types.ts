@@ -542,3 +542,25 @@ export type ConversationSummary = {
   messageCount: number;
   updatedAt: number;
 };
+
+/** Meta events the app reports (App Install / Activate App are sent by the Meta SDK itself and never reach us). */
+export const META_EVENT_NAMES = ['CompleteRegistration', 'Login', 'ViewContent', 'InitiatedCheckout', 'Purchase'] as const;
+export type MetaEventName = (typeof META_EVENT_NAMES)[number];
+
+/**
+ * metaEvents/{id} — a copy of each Meta event the app logged, so it can be checked without Events Manager.
+ * It proves the app fired the event, not that Meta accepted it. Purchase uses the id `Purchase_{subscriptionId}`
+ * so a repeated report cannot be counted twice. TTL: expireAt (90 days).
+ */
+export type MetaEventDoc = {
+  event: MetaEventName;
+  userId: string;
+  params: { value?: number; currency?: string; planId?: string; subscriptionId?: string; contentType?: string; method?: string };
+  platform: string | null;
+  appVersion: string | null;
+  /** When the app says it happened (device clock). */
+  clientTime: number | null;
+  schemaVersion: number;
+  createdAt: number;
+  expireAt: number;
+};

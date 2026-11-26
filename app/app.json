@@ -38,7 +38,19 @@
         }
       ],
       "expo-image",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "react-native-fbsdk-next",
+        {
+          "appID": "1182103170928807",
+          "clientToken": "270c2ce44b499bcbc18f662af4d480d3",
+          "displayName": "Ankveda",
+          "scheme": "fb1182103170928807",
+          "advertiserIDCollectionEnabled": true,
+          "autoLogAppEventsEnabled": true,
+          "isAutoInitEnabled": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

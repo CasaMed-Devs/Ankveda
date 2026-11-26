@@ -23,6 +23,7 @@ const PaymentsPage = page(() => import('@/pages/PaymentsPage'), 'PaymentsPage');
 const PricingPage = page(() => import('@/pages/PricingPage'), 'PricingPage');
 const AnalyticsPage = page(() => import('@/pages/AnalyticsPage'), 'AnalyticsPage');
 const ActivityPage = page(() => import('@/pages/ActivityPage'), 'ActivityPage');
+const MetaEventsPage = page(() => import('@/pages/MetaEventsPage'), 'MetaEventsPage');
 const SettingsPage = page(() => import('@/pages/SettingsPage'), 'SettingsPage');
 
 const PageLoading = () => (
@@ -90,6 +91,7 @@ const router = createBrowserRouter([
       { path: 'pricing', element: lazyEl(PricingPage) },
       { path: 'analytics', element: lazyEl(AnalyticsPage) },
       { path: 'activity', element: lazyEl(ActivityPage) },
+      { path: 'meta-events', element: lazyEl(MetaEventsPage) },
       { path: 'settings', element: lazyEl(SettingsPage) },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
