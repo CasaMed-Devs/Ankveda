@@ -1,0 +1,7 @@
+# CLI deploys of the backend project (Root Directory = backend) upload from the repo root.
+# Only backend/ is needed; the mobile app's Gradle lock files also break uploads on Windows.
+/app
+/admin
+/docs
+/.firebase
+*.log

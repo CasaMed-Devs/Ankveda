@@ -62,11 +62,16 @@ const request = async <T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?
   const persona = config.persona;
   if (!persona) throw new HttpError(503, 'Chat is not available right now.', 'chat_unavailable');
 
+  // Persona's CDN caches error responses (e.g. the 404 for a chat that has no messages yet) for 10 minutes
+  // per URL, ignoring the API key and Cache-Control request headers. Without a unique URL, a chat opened
+  // before its first message keeps returning "not found" — the app then shows an empty history.
+  const url = method === 'GET' ? `${path}${path.includes('?') ? '&' : '?'}_=${Date.now()}` : path;
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetch(`${persona.baseUrl}/v1${path}`, {
+    response = await fetch(`${persona.baseUrl}/v1${url}`, {
       method,
       headers: { Authorization: `Bearer ${persona.apiKey}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,

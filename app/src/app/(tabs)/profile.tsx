@@ -9,8 +9,9 @@ import { Screen } from '@/components/Screen';
 import { useToast } from '@/components/Toast';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
-import { APP_NAME, LEGAL_URLS, SUPPORT_EMAIL } from '@/lib/config';
+import { APP_NAME, SUPPORT_EMAIL } from '@/lib/config';
 import { formatLongDate, formatPhone } from '@/lib/format';
+import { LEGAL_DOC_KEYS, LEGAL_DOCS, openLegal } from '@/lib/legal';
 import { queryClient, useEntitlement, useMe } from '@/lib/queries';
 import { borderWidth, colors, radii } from '@/theme/tokens';
 
@@ -123,6 +124,13 @@ export default function Profile() {
         <ArrowCard title="Help & support" subtitle="Facing an issue? Write to us" onPress={() => void openSupport()} />
       </View>
 
+      <View style={styles.legal}>
+        <AppText variant="eyebrow">Legal & policies</AppText>
+        {LEGAL_DOC_KEYS.map((doc) => (
+          <ArrowCard key={doc} title={LEGAL_DOCS[doc].title} subtitle={LEGAL_DOCS[doc].subtitle} onPress={() => openLegal(doc)} />
+        ))}
+      </View>
+
       <View style={styles.account}>
         <AppText variant="eyebrow">Account</AppText>
         <PrimaryButton label="Sign out" tone="card" onPress={confirmSignOut} />
@@ -147,11 +155,11 @@ export default function Profile() {
 
       <View style={styles.footer}>
         <AppText variant="small" align="center">
-          <AppText variant="small" onPress={() => void Linking.openURL(LEGAL_URLS.terms)}>
+          <AppText variant="small" onPress={() => openLegal('terms')}>
             Terms of Service
           </AppText>
           {'   ·   '}
-          <AppText variant="small" onPress={() => void Linking.openURL(LEGAL_URLS.privacy)}>
+          <AppText variant="small" onPress={() => openLegal('privacy')}>
             Privacy Policy
           </AppText>
         </AppText>
@@ -168,6 +176,7 @@ const styles = StyleSheet.create({
   identity: { gap: 16 },
   name: { fontSize: 42 },
   rows: { marginTop: 44, gap: 16 },
+  legal: { marginTop: 36, gap: 16 },
   account: { marginTop: 36, gap: 14 },
   deleteRow: {
     flexDirection: 'row',

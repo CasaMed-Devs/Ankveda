@@ -63,6 +63,8 @@ export default function RootLayout() {
           }}
         >
           <Stack.Screen name="index" />
+          {/* Outside the guards: legal pages open from Login (signed out) and Profile (signed in). */}
+          <Stack.Screen name="legal/[doc]" options={{ animation: 'slide_from_right' }} />
           <Stack.Protected guard={!signedIn}>
             <Stack.Screen name="intro" />
             <Stack.Screen name="login" />

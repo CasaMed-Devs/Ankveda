@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Linking, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { PrimaryButton } from '@/components/Buttons';
@@ -9,7 +9,7 @@ import { Heading } from '@/components/Heading';
 import { Screen } from '@/components/Screen';
 import { toast } from '@/components/Toast';
 import { api, ApiError } from '@/lib/api';
-import { LEGAL_URLS } from '@/lib/config';
+import { openLegal } from '@/lib/legal';
 import { colors } from '@/theme/tokens';
 
 /** 04 · Sign up — phone number only (Google/Apple removed by product decision). */
@@ -41,11 +41,11 @@ export default function Login() {
       footer={
         <AppText variant="caption" align="center">
           By continuing, you agree to our{' '}
-          <AppText variant="caption" color={colors.gold} onPress={() => void Linking.openURL(LEGAL_URLS.terms)}>
+          <AppText variant="caption" color={colors.gold} onPress={() => openLegal('terms')}>
             Terms of Service
           </AppText>
           {'\n'}and{' '}
-          <AppText variant="caption" color={colors.gold} onPress={() => void Linking.openURL(LEGAL_URLS.privacy)}>
+          <AppText variant="caption" color={colors.gold} onPress={() => openLegal('privacy')}>
             Privacy Policy
           </AppText>
           .

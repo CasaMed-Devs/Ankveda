@@ -1,7 +1,12 @@
-// Public links shown in the app. Replace with your real pages before launch.
+// Public legal pages, opened in-app on the /legal/[doc] WebView screen.
+export const LEGAL_HOST = 'houseoftech-legal.web.app';
+const LEGAL_BASE = `https://${LEGAL_HOST}/ankveda`;
+
 export const LEGAL_URLS = {
-  terms: process.env.EXPO_PUBLIC_TERMS_URL ?? 'https://ankveda.app/terms',
-  privacy: process.env.EXPO_PUBLIC_PRIVACY_URL ?? 'https://ankveda.app/privacy',
+  privacy: process.env.EXPO_PUBLIC_PRIVACY_URL ?? `${LEGAL_BASE}/privacy`,
+  terms: process.env.EXPO_PUBLIC_TERMS_URL ?? `${LEGAL_BASE}/terms`,
+  paymentCancellation: `${LEGAL_BASE}/payment-cancellation`,
+  deleteAccount: `${LEGAL_BASE}/delete-account`,
 };
 
 export const APP_NAME = 'Ankveda';
